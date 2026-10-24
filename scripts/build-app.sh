@@ -8,6 +8,9 @@ build_number="${BUILD_NUMBER:-1}"
 signing_mode_was_set="${SIGNING_MODE+x}"
 signing_mode="${SIGNING_MODE:-development}"
 requested_identity="${CODE_SIGN_IDENTITY:-}"
+bundle_id="${BUNDLE_ID:-local.opencontexts.app}"
+app_display_name="${APP_NAME:-Open Contexts}"
+app_bundle_filename="${APP_BUNDLE_NAME:-OpenContexts}"
 
 if [[ "$configuration" != release && "$configuration" != debug ]]; then
     echo "Usage: $0 [release|debug]" >&2
@@ -115,7 +118,7 @@ fi
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/opencontexts-build.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
-app="$work_dir/OpenContexts.app"
+app="$work_dir/$app_bundle_filename.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
 build_binary() {
@@ -175,9 +178,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
     <key>CFBundleExecutable</key><string>OpenContexts</string>
-    <key>CFBundleIdentifier</key><string>local.opencontexts.app</string>
-    <key>CFBundleName</key><string>Open Contexts</string>
-    <key>CFBundleDisplayName</key><string>Open Contexts</string>
+    <key>CFBundleIdentifier</key><string>$bundle_id</string>
+    <key>CFBundleName</key><string>$app_display_name</string>
+    <key>CFBundleDisplayName</key><string>$app_display_name</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$version</string>
@@ -218,6 +221,6 @@ if [[ "$signing_mode" == self-signed ]]; then
 fi
 
 mkdir -p dist
-rm -rf dist/OpenContexts.app
-mv "$app" dist/OpenContexts.app
-echo "$PWD/dist/OpenContexts.app"
+rm -rf "dist/$app_bundle_filename.app"
+mv "$app" "dist/$app_bundle_filename.app"
+echo "$PWD/dist/$app_bundle_filename.app"
