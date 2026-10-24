@@ -1,3 +1,12 @@
+MOD 版本的改动:
+
+1. 使用 CGWindowID 作为 win_id 代替 AXUIElement, 手动分组更稳定, 休眠后不会变动分组
+2. 增加使用 title 正则匹配分组, 用 jsonc 管理 grouping 方式; 添加从 窗口/group 上提取 json block 的方式方便编辑文件; 增加 UI 展示 grouping map
+3. 手动分组的时候默认激活固定
+4. 添加快捷键激活侧边栏
+5. 修复 group rename 的时候不能使用快捷键复制粘贴的 issue
+6. 软件改名为 openContexts_mod 作为独立软件和原软件隔离
+
 [English](README.md) | **简体中文**
 
 <h1 align="center"><img src="assets/AppIcon.png" alt="Open Contexts 图标" width="48" height="48" align="absbottom"> Open Contexts — 免费开源的 Mac 窗口切换器</h1>
