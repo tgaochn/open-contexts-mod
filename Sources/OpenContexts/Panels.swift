@@ -1721,10 +1721,13 @@ private final class SidebarItemView: NSView, NSDraggingSource {
         return image
     }
 
+    private var isHovered = false
+    private var isFocused = false
+
     private func setHovered(_ hovered: Bool) {
         guard case .window = style else { return }
-        layer?.backgroundColor = hovered ? appAccentColor.cgColor : NSColor.clear.cgColor
-        titleLabel.textColor = hovered ? .white : .labelColor
+        isHovered = hovered
+        updateWindowAppearance()
     }
 
     var windowRowID: String? {
@@ -1732,11 +1735,28 @@ private final class SidebarItemView: NSView, NSDraggingSource {
         return nil
     }
 
-    /// Persistent accent outline marking the currently-focused window (coexists with hover fill).
+    /// Marks the currently-focused window with a tinted fill + outline. Hover fill takes over on top.
     func setFocused(_ focused: Bool) {
         guard case .window = style else { return }
-        layer?.borderWidth = focused ? 2 : 0
-        layer?.borderColor = focused ? appAccentColor.cgColor : nil
+        isFocused = focused
+        updateWindowAppearance()
+    }
+
+    private func updateWindowAppearance() {
+        if isHovered {
+            layer?.backgroundColor = appAccentColor.cgColor
+            layer?.borderWidth = 0
+            titleLabel.textColor = .white
+        } else if isFocused {
+            layer?.backgroundColor = appAccentColor.withAlphaComponent(0.28).cgColor
+            layer?.borderColor = appAccentColor.cgColor
+            layer?.borderWidth = 1.5
+            titleLabel.textColor = .labelColor
+        } else {
+            layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.borderWidth = 0
+            titleLabel.textColor = .labelColor
+        }
     }
 }
 
