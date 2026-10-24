@@ -790,8 +790,14 @@ public final class GroupStore: ObservableObject {
             let groupKey = Self.titleKey(appID: window.appID, title: window.title)
             let key = liveKeyCounts[groupKey, default: 0] > 1 && savedByKey[groupKey]?.count == 1
                 ? groupKey : Self.documentKey(appID: window.appID, documentURL: window.documentURL) ?? groupKey
-            guard let candidates = savedByKey[key], candidates.count == 1,
-                  let savedID = candidates.first, !usedSavedIDs.contains(savedID) else { continue }
+            guard let candidates = savedByKey[key] else { continue }
+            // Accept duplicate matches only when every candidate record lives in the same group —
+            // then it doesn't matter which live window maps to which record (all belong to that group),
+            // e.g. two Chrome windows with the identical title+URL both pinned to the same group.
+            // Cross-group duplicates stay genuinely ambiguous and fall through to Ungrouped.
+            let candidateGroups = Set(candidates.compactMap { location(of: $0)?.groupID })
+            guard candidateGroups.count == 1,
+                  let savedID = candidates.first(where: { !usedSavedIDs.contains($0) }) else { continue }
             savedIDByWindowID = savedIDByWindowID.filter { $0.value != savedID }
             savedIDByWindowID[window.id] = savedID
             usedSavedIDs.insert(savedID)
