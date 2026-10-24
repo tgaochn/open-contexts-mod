@@ -4,6 +4,17 @@ import Combine
 import OpenContextsCore
 import OSLog
 
+// Private AX API: a window's stable CGWindowID. It survives sleep/wake (where the AXUIElement
+// reference can change and break CFEqual-based identity), and stays constant for the window's life.
+@_silgen_name("_AXUIElementGetWindow")
+private func axGetWindow(_ element: AXUIElement, _ identifier: UnsafeMutablePointer<CGWindowID>) -> AXError
+
+/// The window's CGWindowID, or 0 when it can't be read (callers fall back to element identity).
+private func cgWindowID(of element: AXUIElement) -> CGWindowID {
+    var identifier: CGWindowID = 0
+    return axGetWindow(element, &identifier) == .success ? identifier : 0
+}
+
 @MainActor
 final class WindowService: ObservableObject {
     @Published private(set) var windows: [WindowInfo] = []
@@ -26,6 +37,7 @@ final class WindowService: ObservableObject {
     private struct TrackedWindow: @unchecked Sendable {
         let id: String
         let element: AXUIElement
+        let cgWindowID: CGWindowID
         var info: WindowInfo
     }
 
@@ -303,7 +315,7 @@ final class WindowService: ObservableObject {
         _ = NSApplication.shared
         let service = WindowService()
         var samples = ["A", "B", "C", "D"].map { id in
-            TrackedWindow(id: id, element: AXUIElementCreateApplication(0),
+            TrackedWindow(id: id, element: AXUIElementCreateApplication(0), cgWindowID: 0,
                           info: WindowInfo(id: id, appID: "self-check", appName: "Self-check",
                                            title: id, processID: 0))
         }
@@ -390,8 +402,14 @@ final class WindowService: ObservableObject {
                 AXUIElementSetMessagingTimeout(element, 0.2)
                 guard !discovered.contains(where: { CFEqual($0.element, element) }) else { continue }
 
-                // ponytail: linear identity matching is simpler and fast for desktop-sized window lists.
-                let existing = previous.first { !usedIDs.contains($0.id) && CFEqual($0.element, element) }
+                // Prefer the stable CGWindowID (survives sleep/wake, where the AXUIElement reference
+                // can change); fall back to element identity when the id is unavailable.
+                let windowID = cgWindowID(of: element)
+                let existing = previous.first { prev in
+                    guard !usedIDs.contains(prev.id) else { return false }
+                    if windowID != 0, prev.cgWindowID == windowID { return true }
+                    return CFEqual(prev.element, element)
+                }
                 let roleState: WindowCandidateState
                 let roleRead: AttributeRead<String> = readAttribute(kAXRoleAttribute, of: element)
                 switch roleRead {
@@ -495,6 +513,7 @@ final class WindowService: ObservableObject {
                 discovered.append(TrackedWindow(
                     id: id,
                     element: element,
+                    cgWindowID: windowID,
                     info: WindowInfo(
                         id: id,
                         appID: application.appID,
