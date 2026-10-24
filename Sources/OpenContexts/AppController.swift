@@ -193,7 +193,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let focusedID = windowService.focusedID
         let screenID = windowService.focusedScreenID
         for (displayID, panel) in sidebars {
-            panel.setFocusedWindow(displayID == screenID ? focusedID : nil)
+            // If we couldn't resolve the focused window's display, fall back to highlighting on
+            // every sidebar (better than no highlight at all); otherwise only on its own display.
+            let onThisScreen = screenID == nil || displayID == screenID
+            panel.setFocusedWindow(onThisScreen ? focusedID : nil)
         }
     }
 

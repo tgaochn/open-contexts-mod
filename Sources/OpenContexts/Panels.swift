@@ -1748,9 +1748,10 @@ private final class SidebarItemView: NSView, NSDraggingSource {
             layer?.borderWidth = 0
             titleLabel.textColor = .white
         } else if isFocused {
-            layer?.backgroundColor = appAccentColor.withAlphaComponent(0.28).cgColor
-            layer?.borderColor = appAccentColor.cgColor
-            layer?.borderWidth = 1.5
+            // Orange (not accent/blue) so it doesn't blend with the blue-tinted group headers.
+            layer?.backgroundColor = NSColor.systemOrange.withAlphaComponent(0.14).cgColor
+            layer?.borderColor = NSColor.systemOrange.cgColor
+            layer?.borderWidth = 2
             titleLabel.textColor = .labelColor
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
