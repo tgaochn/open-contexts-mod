@@ -20,4 +20,14 @@ APP_BUNDLE_NAME="$bundle_name" \
 SIGNING_MODE=self-signed \
 ./scripts/build-app.sh "${1:-debug}"
 
+# Relaunch cleanly. `open` only re-activates an already-running instance, so if the previous
+# mod process is still alive (quit is async), it would re-activate the old/quitting process
+# instead of launching the new build. Kill the running MOD instance (the release build lives at
+# a different path and is matched out), wait for it to fully exit, then open.
+pattern="/$bundle_name.app/Contents/MacOS/"
+pkill -f "$pattern" 2>/dev/null || true
+for _ in $(seq 1 50); do
+    pgrep -f "$pattern" >/dev/null 2>&1 || break
+    sleep 0.1
+done
 open "dist/$bundle_name.app"
