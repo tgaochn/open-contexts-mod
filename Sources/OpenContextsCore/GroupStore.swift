@@ -135,6 +135,16 @@ public final class GroupStore: ObservableObject {
         self.groups = [WindowGroup(id: Self.ungroupedID, name: "未分组")]
         self.windowsByGroup = [Self.ungroupedID: []]
         load()
+        migrateLegacyRulesFile()
+    }
+
+    /// Renames a pre-existing rules.json to rules.jsonc (content was already JSONC-compatible).
+    private func migrateLegacyRulesFile() {
+        let legacy = fileURL.deletingLastPathComponent().appendingPathComponent("rules.json")
+        let fm = FileManager.default
+        if fm.fileExists(atPath: legacy.path), !fm.fileExists(atPath: rulesFileURL.path) {
+            try? fm.moveItem(at: legacy, to: rulesFileURL)
+        }
     }
 
     public func reconcile(_ windows: [WindowInfo]) {
@@ -348,9 +358,9 @@ public final class GroupStore: ObservableObject {
         revision += 1
     }
 
-    /// JSON rules file kept next to groups.json, for editing in an external editor.
+    /// JSONC rules file kept next to groups.json, for editing in an external editor.
     public var rulesFileURL: URL {
-        fileURL.deletingLastPathComponent().appendingPathComponent("rules.json")
+        fileURL.deletingLastPathComponent().appendingPathComponent("rules.jsonc")
     }
 
     private struct RuleFileEntry: Codable {
