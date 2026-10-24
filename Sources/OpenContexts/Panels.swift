@@ -42,6 +42,7 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
     private var hoverState = SidebarHoverState()
     private var hoverTimer: Timer?
     private var revealed = false
+    private var focusedWindowID: String?
     private var contextMenuOpen = false
     private var dragging = false
     private var sourceDragging = false
@@ -312,6 +313,7 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
                 menu.autoenablesItems = false
                 menu.delegate = self
                 row.setContextMenu(menu)
+                row.setFocused(focusedWindowID != nil && window.id == focusedWindowID)
                 stack.addArrangedSubview(row)
                 constrainSidebarItem(row)
                 if icon == nil, iconRetrySchedules[iconKey] == nil {
@@ -480,6 +482,19 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
                   iconRetrySchedules[iconKey]?.isExhausted == true else { continue }
             iconRetrySchedules[iconKey] = IconRetrySchedule()
             retryApplicationIcon(for: window, iconKey: iconKey)
+        }
+    }
+
+    /// Highlights the currently-focused window's row (helps locate which group is in use).
+    func setFocusedWindow(_ id: String?) {
+        guard focusedWindowID != id else { return }
+        focusedWindowID = id
+        applyFocusHighlight()
+    }
+
+    private func applyFocusHighlight() {
+        for case let row as SidebarItemView in stack.arrangedSubviews {
+            row.setFocused(focusedWindowID != nil && row.windowRowID == focusedWindowID)
         }
     }
 
@@ -1432,7 +1447,7 @@ private final class SidebarItemView: NSView, NSDraggingSource {
         case window(id: String, groupID: String)
     }
     /// Tinted strip behind group headers so they stand out from (indented) window rows.
-    static let groupHeaderBackground = appAccentColor.withAlphaComponent(0.15)
+    static let groupHeaderBackground = appAccentColor.withAlphaComponent(0.22)
     static let windowRowIndent: CGFloat = 14
 
     fileprivate let style: Style
@@ -1710,6 +1725,18 @@ private final class SidebarItemView: NSView, NSDraggingSource {
         guard case .window = style else { return }
         layer?.backgroundColor = hovered ? appAccentColor.cgColor : NSColor.clear.cgColor
         titleLabel.textColor = hovered ? .white : .labelColor
+    }
+
+    var windowRowID: String? {
+        if case let .window(id, _) = style { return id }
+        return nil
+    }
+
+    /// Persistent accent outline marking the currently-focused window (coexists with hover fill).
+    func setFocused(_ focused: Bool) {
+        guard case .window = style else { return }
+        layer?.borderWidth = focused ? 2 : 0
+        layer?.borderColor = focused ? appAccentColor.cgColor : nil
     }
 }
 

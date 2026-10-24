@@ -70,7 +70,7 @@ final class WindowService: ObservableObject {
     private var tracked: [TrackedWindow] = []
     private var localWindows: [String: WeakWindow] = [:]
     private var externalFocusedID: String?
-    private var focusedID: String?
+    @Published private(set) var focusedID: String?
     private var timer: Timer?
     private var scanInFlight = false
     private var lastBadgeScanAt = -Double.infinity
