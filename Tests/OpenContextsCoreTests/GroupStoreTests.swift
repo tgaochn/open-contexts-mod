@@ -898,6 +898,81 @@ final class GroupStoreTests: XCTestCase {
         XCTAssertEqual(try persistedWindows(at: fileURL, in: work).last?["pinnedPosition"] as? Int, 2)
     }
 
+    func testRegexRuleRoutesWindowsAndManualDragWins() throws {
+        let store = GroupStore(fileURL: temporaryFileURL())
+        store.createGroup(name: "Chrome")
+        let chrome = try XCTUnwrap(store.groups.last?.id)
+        store.addRule()
+        var rule = try XCTUnwrap(store.rules.first)
+        rule.mode = .regex
+        rule.pattern = "Butterfly"
+        rule.groupID = chrome
+        store.updateRule(rule)
+
+        store.updateLiveWindows([window("w1", title: "preapply - Model - Butterfly"),
+                                 window("w2", title: "Some Doc - Google Docs")])
+        XCTAssertEqual(store.windows(in: chrome).map(\.id), ["w1"])
+        XCTAssertEqual(store.windows(in: GroupStore.ungroupedID).map(\.id), ["w2"])
+
+        // A manual drag into a real group overrides the rule and sticks.
+        store.createGroup(name: "Other")
+        let other = try XCTUnwrap(store.groups.last?.id)
+        store.moveWindow(id: "w1", to: other)
+        XCTAssertEqual(store.windows(in: other).map(\.id), ["w1"])
+        XCTAssertTrue(store.windows(in: chrome).isEmpty)
+    }
+
+    func testFullTextRuleRequiresExactMatch() throws {
+        let store = GroupStore(fileURL: temporaryFileURL())
+        store.createGroup(name: "G")
+        let g = try XCTUnwrap(store.groups.last?.id)
+        store.addRule()
+        var rule = try XCTUnwrap(store.rules.first)
+        rule.mode = .fullText
+        rule.pattern = "Exact Title"
+        rule.groupID = g
+        store.updateRule(rule)
+
+        store.updateLiveWindows([window("exact", title: "Exact Title"),
+                                 window("partial", title: "Exact Title Plus")])
+        XCTAssertEqual(store.windows(in: g).map(\.id), ["exact"])
+        XCTAssertEqual(store.windows(in: GroupStore.ungroupedID).map(\.id), ["partial"])
+    }
+
+    func testGroupingRulesPersistAndReloadAndDeleteWithGroup() throws {
+        let fileURL = temporaryFileURL()
+        let store = GroupStore(fileURL: fileURL)
+        store.createGroup(name: "Chrome")
+        let chrome = try XCTUnwrap(store.groups.last?.id)
+        store.addRule()
+        var rule = try XCTUnwrap(store.rules.first)
+        rule.mode = .regex
+        rule.pattern = "Butterfly"
+        rule.groupID = chrome
+        store.updateRule(rule)
+
+        let reloaded = GroupStore(fileURL: fileURL)
+        XCTAssertEqual(reloaded.rules.count, 1)
+        XCTAssertEqual(reloaded.rules.first?.pattern, "Butterfly")
+        XCTAssertEqual(reloaded.rules.first?.mode, .regex)
+        reloaded.updateLiveWindows([window("w1", title: "x Butterfly y")])
+        XCTAssertEqual(reloaded.windows(in: chrome).map(\.id), ["w1"])
+
+        reloaded.deleteGroup(id: chrome)
+        XCTAssertTrue(reloaded.rules.isEmpty)
+        let afterDelete = GroupStore(fileURL: fileURL)
+        XCTAssertTrue(afterDelete.rules.isEmpty)
+    }
+
+    func testEmptyRulesLeaveNoRulesKeyInPersistedFile() throws {
+        let fileURL = temporaryFileURL()
+        let store = GroupStore(fileURL: fileURL)
+        store.reconcile([window("a", title: "A")])
+        let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL))
+            as? [String: Any])
+        XCTAssertNil(root["rules"])
+    }
+
     private func temporaryFileURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

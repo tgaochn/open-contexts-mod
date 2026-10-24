@@ -11,11 +11,87 @@ public struct WindowGroup: Identifiable, Codable, Equatable {
     }
 }
 
+/// A user-defined rule that routes a window into a group by matching one of its
+/// fields. Manual placement (a saved window inside a real group) always wins over
+/// rules; rules only apply to windows the user has not manually grouped.
+public struct GroupRule: Identifiable, Codable, Equatable {
+    public enum Field: String, Codable, CaseIterable { case title, app, documentURL }
+    public enum MatchMode: String, Codable, CaseIterable { case fullText, regex }
+
+    public let id: String
+    public var field: Field
+    public var mode: MatchMode
+    public var pattern: String
+    public var groupID: String
+
+    public init(id: String = UUID().uuidString, field: Field = .title,
+                mode: MatchMode = .fullText, pattern: String = "", groupID: String) {
+        self.id = id
+        self.field = field
+        self.mode = mode
+        self.pattern = pattern
+        self.groupID = groupID
+    }
+
+    func value(in window: WindowInfo) -> String {
+        switch field {
+        case .title: return window.title
+        case .app: return window.appName
+        case .documentURL: return window.documentURL ?? ""
+        }
+    }
+
+    func matches(_ window: WindowInfo) -> Bool {
+        guard !pattern.isEmpty else { return false }
+        let value = value(in: window)
+        switch mode {
+        case .fullText:
+            return value == pattern
+        case .regex:
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            return regex.firstMatch(in: value, options: [], range: range) != nil
+        }
+    }
+}
+
+extension GroupRule.Field {
+    var token: String {
+        switch self {
+        case .title: return "title"
+        case .app: return "app"
+        case .documentURL: return "url"
+        }
+    }
+
+    init?(token: String) {
+        switch token.lowercased() {
+        case "title": self = .title
+        case "app": self = .app
+        case "url", "documenturl": self = .documentURL
+        default: return nil
+        }
+    }
+}
+
+extension GroupRule.MatchMode {
+    var token: String { self == .regex ? "regex" : "fulltext" }
+
+    init?(token: String) {
+        switch token.lowercased() {
+        case "regex": self = .regex
+        case "fulltext", "full", "text": self = .fullText
+        default: return nil
+        }
+    }
+}
+
 public final class GroupStore: ObservableObject {
     public static let ungroupedID = "ungrouped"
     public enum PersistenceErrorOperation { case read, write }
 
     @Published public private(set) var groups: [WindowGroup]
+    @Published public private(set) var rules: [GroupRule] = []
     @Published public private(set) var revision = 0
     public private(set) var persistenceError: String?
     public private(set) var persistenceErrorOperation: PersistenceErrorOperation?
@@ -39,6 +115,7 @@ public final class GroupStore: ObservableObject {
     private struct State: Codable {
         var groups: [WindowGroup]
         var windowsByGroup: [String: [SavedWindow]]
+        var rules: [GroupRule]?
     }
 
     private struct WindowKey: Hashable {
@@ -116,13 +193,22 @@ public final class GroupStore: ObservableObject {
     public func windows(in groupID: String) -> [WindowInfo] {
         guard groups.contains(where: { $0.id == groupID }) else { return [] }
         let windowIDBySavedID = Dictionary(uniqueKeysWithValues: savedIDByWindowID.map { ($0.value, $0.key) })
-        let savedWindows = windowsByGroup[groupID, default: []].compactMap { saved in
-            windowIDBySavedID[saved.id].flatMap { activeWindows[$0] }
+        // Records physically stored in this group, shown only while the window still resolves here
+        // (a rule may route a window whose record lives in Ungrouped into another group).
+        let savedWindows = windowsByGroup[groupID, default: []].compactMap { saved -> WindowInfo? in
+            guard let liveID = windowIDBySavedID[saved.id], let window = activeWindows[liveID],
+                  effectiveGroupID(for: window) == groupID else { return nil }
+            return window
         }
-        let unsavedWindows = groupID == Self.ungroupedID ? activeWindowOrder.compactMap { id in
-            savedIDByWindowID[id] == nil ? activeWindows[id] : nil
-        } : []
-        let visible = savedWindows + unsavedWindows
+        let savedLiveIDs = Set(savedWindows.map(\.id))
+        // Windows that resolve into this group but whose record lives elsewhere (rule-routed) or that
+        // have no record yet (unsaved windows default to Ungrouped unless a rule claims them).
+        let extraWindows = activeWindowOrder.compactMap { id -> WindowInfo? in
+            guard !savedLiveIDs.contains(id), let window = activeWindows[id],
+                  effectiveGroupID(for: window) == groupID else { return nil }
+            return window
+        }
+        let visible = savedWindows + extraWindows
         let pinned = windowsByGroup[groupID, default: []].compactMap { saved -> (String, Int)? in
             guard let position = saved.pinnedPosition, let liveID = windowIDBySavedID[saved.id] else {
                 return nil
@@ -131,6 +217,215 @@ public final class GroupStore: ObservableObject {
         }
         let byID = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0) })
         return Self.arrangedWindowIDs(visible.map(\.id), pinned: pinned).compactMap { byID[$0] }
+    }
+
+    /// The group a live window currently belongs to. Manual placement (a saved record in a real
+    /// group) wins; otherwise the first matching rule claims it; otherwise it falls to Ungrouped.
+    private func effectiveGroupID(for window: WindowInfo) -> String {
+        if let savedID = savedIDByWindowID[window.id], let (groupID, _) = location(of: savedID),
+           groupID != Self.ungroupedID {
+            return groupID
+        }
+        return ruleTargetGroupID(for: window) ?? Self.ungroupedID
+    }
+
+    private func ruleTargetGroupID(for window: WindowInfo) -> String? {
+        for rule in rules where rule.groupID != Self.ungroupedID
+            && groups.contains(where: { $0.id == rule.groupID }) {
+            if rule.matches(window) { return rule.groupID }
+        }
+        return nil
+    }
+
+    public func addRule(groupID: String? = nil) {
+        let target = groupID ?? groups.first(where: { $0.id != Self.ungroupedID })?.id
+        guard let target else { return }
+        rules.append(GroupRule(groupID: target))
+        rulesChanged()
+    }
+
+    /// Creates a rule pre-filled from a live window: its title (or app name when untitled) as a
+    /// `fulltext` rule targeting the window's current group. Returns false when there is no real
+    /// group to target. The user then edits it (e.g. turn the title into a regex fragment) in Settings.
+    private func ruleEntry(forWindow id: String) -> (rule: GroupRule, groupName: String)? {
+        guard let window = activeWindows[id] else { return nil }
+        let current = effectiveGroupID(for: window)
+        let target = current != Self.ungroupedID
+            ? current
+            : groups.first(where: { $0.id != Self.ungroupedID })?.id
+        guard let target else { return nil }
+        let title = window.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let field: GroupRule.Field = title.isEmpty ? .app : .title
+        let pattern = title.isEmpty ? window.appName : window.title
+        guard !pattern.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        let name = groups.first(where: { $0.id == target })?.name ?? target
+        return (GroupRule(field: field, mode: .fullText, pattern: pattern, groupID: target), name)
+    }
+
+    @discardableResult
+    public func addRuleFromWindow(id: String) -> Bool {
+        guard let (rule, _) = ruleEntry(forWindow: id) else { return false }
+        rules.append(rule)
+        rulesChanged()
+        return true
+    }
+
+    /// JSON for a SINGLE rule pre-filled from a window (one object, to paste into a rules array).
+    /// Returns nil when no rule can be made (no live window / no real group).
+    public func singleRuleJSON(forWindow id: String) -> String? {
+        guard let (rule, name) = ruleEntry(forWindow: id) else { return nil }
+        let entry = RuleFileEntry(field: rule.field.token, mode: rule.mode.token,
+                                  pattern: rule.pattern, group: name)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(entry), let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return text
+    }
+
+    /// Appends a window's rule to the rules.json file (merging with what's on disk). Returns problems
+    /// (empty = appended). Leaves the file untouched if it exists but doesn't parse.
+    @discardableResult
+    public func appendRuleFromWindowToFile(id: String) -> [String] {
+        guard let (rule, name) = ruleEntry(forWindow: id) else {
+            return ["no rule could be created for this window"]
+        }
+        var file = RuleFile(rules: [])
+        if let data = try? Data(contentsOf: rulesFileURL),
+           let text = String(data: data, encoding: .utf8),
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            do {
+                file = try JSONDecoder().decode(RuleFile.self, from: data)
+            } catch {
+                return ["rules.json has a parse error, not modified: \(error.localizedDescription)"]
+            }
+        }
+        file.rules.append(RuleFileEntry(field: rule.field.token, mode: rule.mode.token,
+                                        pattern: rule.pattern, group: name))
+        do {
+            try FileManager.default.createDirectory(at: rulesFileURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try Self.encodeRuleFile(file).write(to: rulesFileURL, atomically: true, encoding: .utf8)
+        } catch {
+            return ["write failed: \(error.localizedDescription)"]
+        }
+        return []
+    }
+
+    public func updateRule(_ rule: GroupRule) {
+        guard let index = rules.firstIndex(where: { $0.id == rule.id }), rules[index] != rule else { return }
+        rules[index] = rule
+        rulesChanged()
+    }
+
+    public func removeRule(id: String) {
+        guard rules.contains(where: { $0.id == id }) else { return }
+        rules.removeAll { $0.id == id }
+        rulesChanged()
+    }
+
+    private func rulesChanged() {
+        save()
+        revision += 1
+    }
+
+    /// JSON rules file kept next to groups.json, for editing in an external editor.
+    public var rulesFileURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("rules.json")
+    }
+
+    private struct RuleFileEntry: Codable {
+        var field: String
+        var mode: String
+        var pattern: String
+        var group: String
+    }
+
+    private struct RuleFile: Codable {
+        var rules: [RuleFileEntry]
+    }
+
+    public func exportRulesJSON() -> String {
+        let nameByID = Dictionary(groups.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let entries = rules.map {
+            RuleFileEntry(field: $0.field.token, mode: $0.mode.token,
+                          pattern: $0.pattern, group: nameByID[$0.groupID] ?? $0.groupID)
+        }
+        return Self.encodeRuleFile(RuleFile(rules: entries))
+    }
+
+    /// Exports the CURRENT per-window grouping (manual drags + rule-settled windows that have been
+    /// persisted) as a rules template: one `title`/`fulltext` entry per grouped window. Lets you
+    /// start from your real layout and tweak it (turn volatile ones into regex, delete noise)
+    /// instead of writing the mapping from scratch.
+    public func exportCurrentMappingJSON() -> String {
+        let nameByID = Dictionary(groups.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        var entries: [RuleFileEntry] = []
+        var seen = Set<String>()
+        for group in groups where group.id != Self.ungroupedID {
+            let name = nameByID[group.id] ?? group.id
+            for saved in windowsByGroup[group.id, default: []] {
+                let title = saved.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !title.isEmpty, seen.insert("\(group.id)\u{0}\(title)").inserted else { continue }
+                entries.append(RuleFileEntry(field: "title", mode: "fulltext",
+                                             pattern: saved.title, group: name))
+            }
+        }
+        return Self.encodeRuleFile(RuleFile(rules: entries))
+    }
+
+    private static func encodeRuleFile(_ file: RuleFile) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(file), let text = String(data: data, encoding: .utf8) else {
+            return "{\n  \"rules\": []\n}\n"
+        }
+        return text + "\n"
+    }
+
+    /// Replaces all rules from the JSON format. Returns problems (empty = applied cleanly).
+    /// On any parse or validation error nothing is changed, so a typo can't silently wipe rules.
+    @discardableResult
+    public func importRules(fromJSON text: String) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            if !rules.isEmpty { rules = []; rulesChanged() }
+            return []
+        }
+        guard let data = trimmed.data(using: .utf8) else { return ["invalid text encoding"] }
+        let file: RuleFile
+        do {
+            file = try JSONDecoder().decode(RuleFile.self, from: data)
+        } catch {
+            return ["JSON parse error: \(error.localizedDescription)"]
+        }
+        let idByName = Dictionary(
+            groups.filter { $0.id != Self.ungroupedID }.map { ($0.name, $0.id) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var parsed: [GroupRule] = []
+        var errors: [String] = []
+        for (index, entry) in file.rules.enumerated() {
+            let number = index + 1
+            guard let field = GroupRule.Field(token: entry.field) else {
+                errors.append("rule \(number): unknown field \"\(entry.field)\" (use title/app/url)"); continue
+            }
+            guard let mode = GroupRule.MatchMode(token: entry.mode) else {
+                errors.append("rule \(number): unknown mode \"\(entry.mode)\" (use fulltext/regex)"); continue
+            }
+            guard !entry.pattern.trimmingCharacters(in: .whitespaces).isEmpty else {
+                errors.append("rule \(number): empty pattern"); continue
+            }
+            guard let groupID = idByName[entry.group] else {
+                errors.append("rule \(number): group not found: \"\(entry.group)\""); continue
+            }
+            parsed.append(GroupRule(field: field, mode: mode, pattern: entry.pattern, groupID: groupID))
+        }
+        guard errors.isEmpty else { return errors }
+        rules = parsed
+        rulesChanged()
+        return []
     }
 
     public func pinPosition(id: String) -> Int? {
@@ -199,6 +494,7 @@ public final class GroupStore: ObservableObject {
             return saved
         }
         windowsByGroup[Self.ungroupedID, default: []].append(contentsOf: transferred)
+        rules.removeAll { $0.groupID == id }
         changed(pinnedSlots: pinnedSlots)
     }
 
@@ -291,8 +587,19 @@ public final class GroupStore: ObservableObject {
 
     private static var defaultFileURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("OpenContexts", isDirectory: true)
+            .appendingPathComponent(containerFolderName(forBundleID: Bundle.main.bundleIdentifier),
+                                    isDirectory: true)
             .appendingPathComponent("groups.json")
+    }
+
+    /// Per-app data folder name. The release (`local.opencontexts.app`) keeps the historical
+    /// "OpenContexts" folder; any other bundle id (e.g. a dev build) gets its own suffixed folder,
+    /// so a dev build never shares groups.json / rules.json with the installed release.
+    public static func containerFolderName(forBundleID bundleID: String?) -> String {
+        let base = "OpenContexts"
+        guard let bundleID, !bundleID.isEmpty, bundleID != "local.opencontexts.app" else { return base }
+        let suffix = bundleID.split(separator: ".").last.map(String.init) ?? bundleID
+        return "\(base).\(suffix)"
     }
 
     /// Title (or app, when untitled) key used to group same-looking windows.
@@ -501,6 +808,7 @@ public final class GroupStore: ObservableObject {
             }
             groups = state.groups
             windowsByGroup = state.windowsByGroup
+            rules = (state.rules ?? []).filter { rule in ids.contains(rule.groupID) }
             for id in ids where windowsByGroup[id] == nil { windowsByGroup[id] = [] }
         } catch {
             persistenceBlocked = true
@@ -519,7 +827,8 @@ public final class GroupStore: ObservableObject {
             let persistedWindows = Dictionary(uniqueKeysWithValues: groups.map { group in
                 (group.id, windowsByGroup[group.id, default: []])
             })
-            let data = try JSONEncoder().encode(State(groups: groups, windowsByGroup: persistedWindows))
+            let data = try JSONEncoder().encode(State(groups: groups, windowsByGroup: persistedWindows,
+                                                      rules: rules.isEmpty ? nil : rules))
             try data.write(to: fileURL, options: .atomic)
             persistenceError = nil
             persistenceErrorOperation = nil

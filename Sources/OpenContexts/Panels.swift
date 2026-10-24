@@ -26,6 +26,7 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
     private let onCreateGroup: (String) -> Void
     private let onRenameGroup: (String, String) -> Void
     private let onDeleteGroup: (String) -> Void
+    private let onCreateRule: (String, Bool) -> Void
     private let displayScreen: NSScreen
     private var alwaysVisible = false
     private var fullscreen = false
@@ -88,7 +89,8 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
          onMoveWindow: @escaping WindowMove, onMoveGroup: @escaping GroupMove,
          onCreateGroup: @escaping (String) -> Void,
          onRenameGroup: @escaping (String, String) -> Void,
-         onDeleteGroup: @escaping (String) -> Void) {
+         onDeleteGroup: @escaping (String) -> Void,
+         onCreateRule: @escaping (String, Bool) -> Void) {
         self.displayScreen = screen
         self.onActivate = onActivate
         self.canCloseWindow = canCloseWindow
@@ -100,6 +102,7 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         self.onCreateGroup = onCreateGroup
         self.onRenameGroup = onRenameGroup
         self.onDeleteGroup = onDeleteGroup
+        self.onCreateRule = onCreateRule
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
 
@@ -347,6 +350,26 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         close.representedObject = target.id
         close.isEnabled = canCloseWindow(target.id)
         menu.addItem(close)
+        let hasRealGroup = renderedGroups.contains { $0.id != GroupStore.ungroupedID }
+        let createRule = NSMenuItem(title: L10n.text("Create rule from window", language: language),
+                                    action: nil, keyEquivalent: "")
+        createRule.isEnabled = hasRealGroup
+        let createRuleMenu = NSMenu()
+        createRuleMenu.autoenablesItems = false
+        let toFile = NSMenuItem(title: L10n.text("Append to rules file", language: language),
+                                action: #selector(createRuleToFile(_:)), keyEquivalent: "")
+        toFile.target = self
+        toFile.representedObject = target.id
+        toFile.isEnabled = hasRealGroup
+        createRuleMenu.addItem(toFile)
+        let toClipboard = NSMenuItem(title: L10n.text("Copy to clipboard", language: language),
+                                     action: #selector(createRuleToClipboard(_:)), keyEquivalent: "")
+        toClipboard.target = self
+        toClipboard.representedObject = target.id
+        toClipboard.isEnabled = hasRealGroup
+        createRuleMenu.addItem(toClipboard)
+        createRule.submenu = createRuleMenu
+        menu.addItem(createRule)
         menu.addItem(.separator())
         let windows = renderedGroups.flatMap { renderedWindows[$0.id, default: []] }
             .filter { $0.processID == processID }
@@ -384,6 +407,18 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         guard let id = sender.representedObject as? String,
               renderedWindows.values.joined().contains(where: { $0.id == id }) else { return }
         onActivate(id)
+    }
+
+    @objc private func createRuleToFile(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              renderedWindows.values.joined().contains(where: { $0.id == id }) else { return }
+        onCreateRule(id, false)
+    }
+
+    @objc private func createRuleToClipboard(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              renderedWindows.values.joined().contains(where: { $0.id == id }) else { return }
+        onCreateRule(id, true)
     }
 
     @objc private func hideMenuApplication(_ sender: NSMenuItem) {
@@ -898,7 +933,12 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
                 && menu.items[1].action == #selector(closeMenuWindow(_:))
                 && menu.items[1].representedObject as? String == menu.title
                 && menu.items[1].isEnabled == canCloseWindow(menu.title)
-                && Array(menu.items.dropFirst(3).prefix(windowIDs.count))
+                && menu.items[2].title == L10n.text("Create rule from window", language: language)
+                && menu.items[2].submenu?.items.map(\.title) == [
+                    L10n.text("Append to rules file", language: language),
+                    L10n.text("Copy to clipboard", language: language)]
+                && menu.items[2].submenu?.items.first?.representedObject as? String == menu.title
+                && Array(menu.items.dropFirst(4).prefix(windowIDs.count))
                     .compactMap { $0.representedObject as? String } == windowIDs
                 && menu.items.suffix(2).map(\.title) == [L10n.text("Hide App", language: language),
                                                         L10n.text("Quit App", language: language)]
@@ -1921,7 +1961,8 @@ enum PanelSmokeCheck {
             onMoveGroup: { groupMoves.append(($0, $1)) },
             onCreateGroup: { _ in },
             onRenameGroup: { _, _ in },
-            onDeleteGroup: { _ in }
+            onDeleteGroup: { _ in },
+            onCreateRule: { _, _ in }
         )
         sidebar.smokeStopHoverPolling()
         let windows = (0..<200).map {

@@ -451,6 +451,9 @@ struct SettingsView: View {
                 }
                 .toggleStyle(.checkbox)
             }
+            settingsRow("Grouping rules") {
+                GroupingRulesEditor(groupStore: groupStore, language: language)
+            }
         }
     }
 
@@ -521,6 +524,203 @@ struct SettingsView: View {
             }
         }
         return true
+    }
+}
+
+struct GroupingRulesEditor: View {
+    @ObservedObject var groupStore: GroupStore
+    var language: AppLanguage
+    @State private var importErrors: [String] = []
+
+    private var realGroups: [OpenContextsCore.WindowGroup] {
+        groupStore.groups.filter { $0.id != GroupStore.ungroupedID }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L10n.text("Rules route a window into a group by matching text. Manual drag always wins.",
+                           language: language))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Button {
+                    openInExternalEditor()
+                } label: {
+                    Label(L10n.text("Edit as text…", language: language), systemImage: "square.and.pencil")
+                }
+                Button {
+                    reloadFromFile()
+                } label: {
+                    Label(L10n.text("Reload from file", language: language), systemImage: "arrow.clockwise")
+                }
+                Menu {
+                    Button(L10n.text("Export to file…", language: language)) { exportCurrentGroupingToFile() }
+                    Button(L10n.text("Copy to clipboard", language: language)) { copyCurrentGroupingToClipboard() }
+                } label: {
+                    Label(L10n.text("Export current grouping…", language: language),
+                          systemImage: "square.and.arrow.up")
+                }
+                .menuStyle(.button)
+                .fixedSize()
+            }
+            .controlSize(.small)
+
+            Text(verbatim: groupStore.rulesFileURL.path)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            if !importErrors.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(importErrors, id: \.self) { error in
+                        Text(error).font(.system(size: 11)).foregroundStyle(.red)
+                    }
+                }
+            }
+
+            if !groupStore.rules.isEmpty || !realGroups.isEmpty {
+                Divider().padding(.vertical, 2)
+            }
+
+            ForEach(groupStore.rules) { rule in
+                ruleRow(rule)
+            }
+            Button {
+                groupStore.addRule()
+            } label: {
+                Label(L10n.text("Add rule", language: language), systemImage: "plus")
+            }
+            .controlSize(.small)
+            .disabled(realGroups.isEmpty)
+            if realGroups.isEmpty {
+                Text(L10n.text("Create a group first to add rules.", language: language))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func ruleRow(_ rule: GroupRule) -> some View {
+        HStack(spacing: 6) {
+            Picker("", selection: binding(rule, \.field)) {
+                ForEach(GroupRule.Field.allCases, id: \.self) { field in
+                    Text(name(field)).tag(field)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 72)
+
+            Picker("", selection: binding(rule, \.mode)) {
+                ForEach(GroupRule.MatchMode.allCases, id: \.self) { mode in
+                    Text(name(mode)).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 84)
+
+            TextField(L10n.text("Pattern", language: language), text: binding(rule, \.pattern))
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: .infinity)
+
+            Text("→").foregroundStyle(.secondary)
+
+            Picker("", selection: binding(rule, \.groupID)) {
+                ForEach(realGroups) { group in
+                    Text(group.name).tag(group.id)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 96)
+
+            Button {
+                groupStore.removeRule(id: rule.id)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help(L10n.text("Delete", language: language))
+        }
+        .controlSize(.small)
+    }
+
+    private func openInExternalEditor() {
+        let url = groupStore.rulesFileURL
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try groupStore.exportRulesJSON().write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            importErrors = ["write failed: \(error.localizedDescription)"]
+            return
+        }
+        importErrors = []
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-t", url.path]
+        try? process.run()
+    }
+
+    private func reloadFromFile() {
+        let url = groupStore.rulesFileURL
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            importErrors = ["read failed: \(url.path)"]
+            return
+        }
+        importErrors = groupStore.importRules(fromJSON: text)
+    }
+
+    private func exportCurrentGroupingToFile() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "rules.json"
+        panel.directoryURL = groupStore.rulesFileURL.deletingLastPathComponent()
+        panel.message = L10n.text("Save your current grouping as an editable rules template.",
+                                  language: language)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try groupStore.exportCurrentMappingJSON().write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            importErrors = ["export failed: \(error.localizedDescription)"]
+            return
+        }
+        importErrors = []
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-t", url.path]
+        try? process.run()
+    }
+
+    private func copyCurrentGroupingToClipboard() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(groupStore.exportCurrentMappingJSON(), forType: .string)
+        importErrors = []
+    }
+
+    private func binding<Value>(_ rule: GroupRule,
+                                _ keyPath: WritableKeyPath<GroupRule, Value>) -> Binding<Value> {
+        Binding(
+            get: { rule[keyPath: keyPath] },
+            set: { newValue in
+                var updated = rule
+                updated[keyPath: keyPath] = newValue
+                groupStore.updateRule(updated)
+            }
+        )
+    }
+
+    private func name(_ field: GroupRule.Field) -> String {
+        switch field {
+        case .title: return L10n.text("Title", language: language)
+        case .app: return L10n.text("App", language: language)
+        case .documentURL: return L10n.text("URL", language: language)
+        }
+    }
+
+    private func name(_ mode: GroupRule.MatchMode) -> String {
+        switch mode {
+        case .fullText: return L10n.text("Full text", language: language)
+        case .regex: return L10n.text("Regex", language: language)
+        }
     }
 }
 
