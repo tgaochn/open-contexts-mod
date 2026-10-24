@@ -50,6 +50,7 @@ final class WindowService: ObservableObject {
     private struct ScanResult: @unchecked Sendable {
         let windows: [TrackedWindow]
         let focusedID: String?
+        let focusedScreenID: CGDirectDisplayID?
         let fullscreenScreenIDs: Set<UInt32>
         let activeAppIDs: Set<String>
         let badgeReads: [String: DockBadgeRead]?
@@ -71,6 +72,8 @@ final class WindowService: ObservableObject {
     private var localWindows: [String: WeakWindow] = [:]
     private var externalFocusedID: String?
     @Published private(set) var focusedID: String?
+    /// Display the focused window is on, so each screen's sidebar highlights only its own focus.
+    @Published private(set) var focusedScreenID: CGDirectDisplayID?
     private var timer: Timer?
     private var scanInFlight = false
     private var lastBadgeScanAt = -Double.infinity
@@ -153,6 +156,7 @@ final class WindowService: ObservableObject {
         orderedIDs.append(contentsOf: result.windows.map(\.id).filter { !orderedIDs.contains($0) })
 
         externalFocusedID = result.focusedID
+        focusedScreenID = result.focusedScreenID
         if let externalFocusedID, let index = orderedIDs.firstIndex(of: externalFocusedID), index != 0 {
             orderedIDs.remove(at: index)
             orderedIDs.insert(externalFocusedID, at: 0)
@@ -257,7 +261,7 @@ final class WindowService: ObservableObject {
         service.registerLocalWindow(window, id: id)
         guard service.windows.filter({ $0.id == id }).count == 1 else { return false }
         service.unregisterLocalWindow(id: id)
-        service.apply(ScanResult(windows: [], focusedID: nil, fullscreenScreenIDs: [],
+        service.apply(ScanResult(windows: [], focusedID: nil, focusedScreenID: nil, fullscreenScreenIDs: [],
                                  activeAppIDs: [], badgeReads: nil))
         guard !service.windows.contains(where: { $0.id == id }) else { return false }
         service.registerLocalWindow(window, id: id)
@@ -331,7 +335,7 @@ final class WindowService: ObservableObject {
                 samples[1].info = WindowInfo(id: "B", appID: "self-check", appName: "Self-check",
                                             title: "Updated B", documentURL: "file:///B", processID: 0)
             }
-            service.apply(ScanResult(windows: ids.map { samples[$0] }, focusedID: focus,
+            service.apply(ScanResult(windows: ids.map { samples[$0] }, focusedID: focus, focusedScreenID: nil,
                                      fullscreenScreenIDs: [], activeAppIDs: [], badgeReads: nil))
             guard service.tracked.map(\.id) == expected,
                   service.windows.map(\.id) == expected,
@@ -530,9 +534,11 @@ final class WindowService: ObservableObject {
         let focusedID = focusedElement.flatMap { focused in
             discovered.first { CFEqual($0.element, focused) }?.id
         }
+        let focusedScreenID = focusedElement.flatMap { frame(of: $0) }.flatMap { displayID(containing: $0) }
         return ScanResult(
             windows: discovered,
             focusedID: focusedID,
+            focusedScreenID: focusedScreenID,
             fullscreenScreenIDs: fullscreenDisplays(in: discovered),
             activeAppIDs: Set(applications.map(\.appID)),
             badgeReads: badgeReads
@@ -632,6 +638,17 @@ final class WindowService: ObservableObject {
             }
         }
         return result
+    }
+
+    nonisolated private static func displayID(containing frame: CGRect) -> CGDirectDisplayID? {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success else { return nil }
+        var displays = Array(repeating: CGDirectDisplayID(), count: Int(count))
+        guard CGGetActiveDisplayList(count, &displays, &count) == .success else { return nil }
+        guard let display = displays.max(by: {
+            CGDisplayBounds($0).intersection(frame).area < CGDisplayBounds($1).intersection(frame).area
+        }), CGDisplayBounds(display).intersection(frame).area > 0 else { return nil }
+        return display
     }
 
     nonisolated private static func onScreenWindowFrames() -> [pid_t: [CGRect]] {

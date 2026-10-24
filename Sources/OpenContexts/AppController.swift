@@ -98,9 +98,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         groupStore.$revision.dropFirst().sink { [weak self] _ in self?.updateSidebars() }
             .store(in: &cancellables)
 
-        windowService.$focusedID.removeDuplicates().sink { [weak self] id in
-            self?.sidebars.values.forEach { $0.setFocusedWindow(id) }
-        }.store(in: &cancellables)
+        windowService.$focusedID.removeDuplicates().sink { [weak self] _ in self?.updateFocusHighlight() }
+            .store(in: &cancellables)
 
         // objectWillChange fires before the new value is stored, so read settings on the next turn.
         settings.objectWillChange.sink { [weak self] _ in
@@ -185,6 +184,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 language: settings.language
             )
             panel.updateBadges(windowService.appBadges)
+        }
+        updateFocusHighlight()
+    }
+
+    /// Highlights the focused window only on the sidebar of the display it's on (the one you're using).
+    private func updateFocusHighlight() {
+        let focusedID = windowService.focusedID
+        let screenID = windowService.focusedScreenID
+        for (displayID, panel) in sidebars {
+            panel.setFocusedWindow(displayID == screenID ? focusedID : nil)
         }
     }
 
