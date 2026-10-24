@@ -27,6 +27,7 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
     private let onRenameGroup: (String, String) -> Void
     private let onDeleteGroup: (String) -> Void
     private let onCreateRule: (String, Bool) -> Void
+    private let onExportGroup: (String, Bool) -> Void
     private let displayScreen: NSScreen
     private var alwaysVisible = false
     private var fullscreen = false
@@ -90,7 +91,8 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
          onCreateGroup: @escaping (String) -> Void,
          onRenameGroup: @escaping (String, String) -> Void,
          onDeleteGroup: @escaping (String) -> Void,
-         onCreateRule: @escaping (String, Bool) -> Void) {
+         onCreateRule: @escaping (String, Bool) -> Void,
+         onExportGroup: @escaping (String, Bool) -> Void) {
         self.displayScreen = screen
         self.onActivate = onActivate
         self.canCloseWindow = canCloseWindow
@@ -103,6 +105,7 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         self.onRenameGroup = onRenameGroup
         self.onDeleteGroup = onDeleteGroup
         self.onCreateRule = onCreateRule
+        self.onExportGroup = onExportGroup
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
 
@@ -267,7 +270,21 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
                 let delete = NSMenuItem(title: L10n.text("Delete Group", language: language), action: #selector(deleteGroup(_:)), keyEquivalent: "")
                 delete.target = self
                 delete.representedObject = group.id
-                menu.items = [rename, delete]
+                let export = NSMenuItem(title: L10n.text("Export group…", language: language),
+                                        action: nil, keyEquivalent: "")
+                let exportMenu = NSMenu()
+                exportMenu.autoenablesItems = false
+                let exportFile = NSMenuItem(title: L10n.text("Export to file…", language: language),
+                                            action: #selector(exportGroupToFile(_:)), keyEquivalent: "")
+                exportFile.target = self
+                exportFile.representedObject = group.id
+                let exportClip = NSMenuItem(title: L10n.text("Copy to clipboard", language: language),
+                                            action: #selector(exportGroupToClipboard(_:)), keyEquivalent: "")
+                exportClip.target = self
+                exportClip.representedObject = group.id
+                exportMenu.items = [exportFile, exportClip]
+                export.submenu = exportMenu
+                menu.items = [rename, delete, .separator(), export]
                 menu.delegate = self
                 header.menu = menu
             }
@@ -419,6 +436,18 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         guard let id = sender.representedObject as? String,
               renderedWindows.values.joined().contains(where: { $0.id == id }) else { return }
         onCreateRule(id, true)
+    }
+
+    @objc private func exportGroupToFile(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              renderedGroups.contains(where: { $0.id == id }) else { return }
+        onExportGroup(id, false)
+    }
+
+    @objc private func exportGroupToClipboard(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              renderedGroups.contains(where: { $0.id == id }) else { return }
+        onExportGroup(id, true)
     }
 
     @objc private func hideMenuApplication(_ sender: NSMenuItem) {
@@ -1962,7 +1991,8 @@ enum PanelSmokeCheck {
             onCreateGroup: { _ in },
             onRenameGroup: { _, _ in },
             onDeleteGroup: { _ in },
-            onCreateRule: { _, _ in }
+            onCreateRule: { _, _ in },
+            onExportGroup: { _, _ in }
         )
         sidebar.smokeStopHoverPolling()
         let windows = (0..<200).map {

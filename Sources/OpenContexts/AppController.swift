@@ -131,7 +131,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 onCreateGroup: { [weak self] in self?.groupStore.createGroup(name: $0) },
                 onRenameGroup: { [weak self] id, name in self?.groupStore.renameGroup(id: id, name: name) },
                 onDeleteGroup: { [weak self] in self?.groupStore.deleteGroup(id: $0) },
-                onCreateRule: { [weak self] id, toClipboard in self?.createRule(from: id, toClipboard: toClipboard) }
+                onCreateRule: { [weak self] id, toClipboard in self?.createRule(from: id, toClipboard: toClipboard) },
+                onExportGroup: { [weak self] groupID, toClipboard in self?.exportGroup(groupID, toClipboard: toClipboard) }
             )
             switchers[id] = SwitcherPanel(
                 screen: screen,
@@ -326,6 +327,26 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 alert.runModal()
             }
         }
+    }
+
+    private func exportGroup(_ groupID: String, toClipboard: Bool) {
+        let json = groupStore.exportGroupMappingJSON(groupID: groupID)
+        if toClipboard {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+            return
+        }
+        let panel = NSSavePanel()
+        let name = groupStore.groups.first(where: { $0.id == groupID })?.name ?? "group"
+        panel.nameFieldStringValue = "\(name).json"
+        panel.directoryURL = groupStore.rulesFileURL.deletingLastPathComponent()
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard (try? json.write(to: url, atomically: true, encoding: .utf8)) != nil else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-t", url.path]
+        try? process.run()
     }
 
     @objc private func requestAccessibility() {

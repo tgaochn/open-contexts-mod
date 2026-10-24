@@ -360,19 +360,28 @@ public final class GroupStore: ObservableObject {
     /// start from your real layout and tweak it (turn volatile ones into regex, delete noise)
     /// instead of writing the mapping from scratch.
     public func exportCurrentMappingJSON() -> String {
-        let nameByID = Dictionary(groups.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         var entries: [RuleFileEntry] = []
-        var seen = Set<String>()
         for group in groups where group.id != Self.ungroupedID {
-            let name = nameByID[group.id] ?? group.id
-            for saved in windowsByGroup[group.id, default: []] {
-                let title = saved.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !title.isEmpty, seen.insert("\(group.id)\u{0}\(title)").inserted else { continue }
-                entries.append(RuleFileEntry(field: "title", mode: "fulltext",
-                                             pattern: saved.title, group: name))
-            }
+            entries.append(contentsOf: groupMappingEntries(groupID: group.id))
         }
         return Self.encodeRuleFile(RuleFile(rules: entries))
+    }
+
+    /// Exports one group's windows as a rules template (one `title`/`fulltext` entry per window).
+    public func exportGroupMappingJSON(groupID: String) -> String {
+        Self.encodeRuleFile(RuleFile(rules: groupMappingEntries(groupID: groupID)))
+    }
+
+    private func groupMappingEntries(groupID: String) -> [RuleFileEntry] {
+        let name = groups.first(where: { $0.id == groupID })?.name ?? groupID
+        var entries: [RuleFileEntry] = []
+        var seen = Set<String>()
+        for saved in windowsByGroup[groupID, default: []] {
+            let title = saved.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty, seen.insert(title).inserted else { continue }
+            entries.append(RuleFileEntry(field: "title", mode: "fulltext", pattern: saved.title, group: name))
+        }
+        return entries
     }
 
     private static func encodeRuleFile(_ file: RuleFile) -> String {
