@@ -9,6 +9,13 @@ public struct SidebarHoverState: Equatable {
         self.isExpanded = isExpanded
     }
 
+    /// Forces the expanded state (used when a shortcut reveals the sidebar and the pointer
+    /// then enters it, handing control back to normal hover collapse).
+    public mutating func reveal() {
+        isExpanded = true
+        outsideSince = nil
+    }
+
     @discardableResult
     public mutating func update(pointer: CGPoint, edgeFrame: CGRect, expandedFrame: CGRect,
                                 dragging: Bool, menuOpen: Bool = false, now: TimeInterval,

@@ -48,11 +48,21 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func configureShortcuts() {
-        shortcuts.configure(allWindows: settings.allWindowsShortcut, currentApp: settings.currentAppShortcut)
+        shortcuts.configure(allWindows: settings.allWindowsShortcut, currentApp: settings.currentAppShortcut,
+                            sidebar: settings.sidebarShortcut)
         shortcuts.canBegin = { [weak self] currentAppOnly in
             self?.availableWindows(currentAppOnly: currentAppOnly).isEmpty == false
         }
         shortcuts.onAction = { [weak self] action in self?.handle(action) }
+        shortcuts.onRevealSidebar = { [weak self] in self?.revealSidebarAtMouse() }
+    }
+
+    private func revealSidebarAtMouse() {
+        let mouse = NSEvent.mouseLocation
+        let targetID = NSScreen.screens.first { $0.frame.contains(mouse) }.map(Self.displayID(for:))
+        for (id, panel) in sidebars {
+            if id == targetID { panel.toggleReveal() } else { panel.clearReveal() }
+        }
     }
 
     private func observeState() {
@@ -94,7 +104,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self?.configureMenuBar()
                 if let self {
                     self.shortcuts.configure(allWindows: self.settings.allWindowsShortcut,
-                                             currentApp: self.settings.currentAppShortcut)
+                                             currentApp: self.settings.currentAppShortcut,
+                                             sidebar: self.settings.sidebarShortcut)
                     self.settingsWindow?.title = L10n.text("OpenContexts Settings", language: self.settings.language)
                     if self.currentAppOnly != nil { self.updateSwitchers() }
                 }

@@ -4,8 +4,12 @@ import Combine
 
 struct KeyboardShortcut: Codable, Equatable {
     static let modifierMask: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate]
-    static let allWindows = KeyboardShortcut(keyCode: 48, modifiers: .maskCommand, keyLabel: "Tab")
+    // All-windows switcher defaults to an intentionally obscure combo; the sidebar reveal owns ⌘Tab.
+    static let allWindows = KeyboardShortcut(keyCode: 111,
+                                             modifiers: [.maskControl, .maskAlternate, .maskCommand],
+                                             keyLabel: "F12")
     static let currentApp = KeyboardShortcut(keyCode: 50, modifiers: .maskCommand, keyLabel: "`")
+    static let sidebar = KeyboardShortcut(keyCode: 48, modifiers: .maskCommand, keyLabel: "Tab")
 
     let keyCode: UInt16
     let modifierRawValue: UInt64
@@ -63,6 +67,8 @@ enum SwitcherAction: Equatable {
     case cancel
 }
 
+enum ShortcutKind: CaseIterable { case allWindows, currentApp, sidebar }
+
 private struct ShortcutState {
     private(set) var isSwitching = false
     private(set) var heldModifiers: CGEventFlags = []
@@ -106,12 +112,14 @@ private struct ShortcutState {
 @MainActor
 final class ShortcutController: ObservableObject {
     @Published private(set) var isRunning = false
-    @Published private(set) var recordingCurrentAppOnly: Bool?
+    @Published private(set) var recordingKind: ShortcutKind?
     @Published private(set) var recordingErrorKey: String?
     var onAction: ((SwitcherAction) -> Void)?
+    var onRevealSidebar: (() -> Void)?
     var canBegin: ((Bool) -> Bool)?
     private(set) var allWindowsShortcut = KeyboardShortcut.allWindows
     private(set) var currentAppShortcut = KeyboardShortcut.currentApp
+    private(set) var sidebarShortcut = KeyboardShortcut.sidebar
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -120,23 +128,27 @@ final class ShortcutController: ObservableObject {
     private var recordingMonitor: Any?
     private var saveRecording: ((KeyboardShortcut) -> Bool)?
 
-    func configure(allWindows: KeyboardShortcut, currentApp: KeyboardShortcut) {
-        guard allWindows.isValid, currentApp.isValid, !allWindows.conflicts(with: currentApp),
-              allWindows != allWindowsShortcut || currentApp != currentAppShortcut else { return }
+    func configure(allWindows: KeyboardShortcut, currentApp: KeyboardShortcut, sidebar: KeyboardShortcut) {
+        guard allWindows.isValid, currentApp.isValid, sidebar.isValid,
+              !allWindows.conflicts(with: currentApp), !allWindows.conflicts(with: sidebar),
+              !currentApp.conflicts(with: sidebar),
+              allWindows != allWindowsShortcut || currentApp != currentAppShortcut
+                || sidebar != sidebarShortcut else { return }
         if let action = state.finish(commit: false) { onAction?(action) }
         allWindowsShortcut = allWindows
         currentAppShortcut = currentApp
+        sidebarShortcut = sidebar
     }
 
-    func beginRecording(currentAppOnly: Bool, onSave: @escaping (KeyboardShortcut) -> Bool) {
+    func beginRecording(kind: ShortcutKind, onSave: @escaping (KeyboardShortcut) -> Bool) {
         cancelRecording()
         if let action = state.finish(commit: false) { onAction?(action) }
-        recordingCurrentAppOnly = currentAppOnly
+        recordingKind = kind
         saveRecording = onSave
         // Also records in Settings before Accessibility permission is granted.
         recordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let captured = MainActor.assumeIsolated {
-                guard let self, self.recordingCurrentAppOnly != nil else { return false }
+                guard let self, self.recordingKind != nil else { return false }
                 self.record(event)
                 return true
             }
@@ -148,12 +160,12 @@ final class ShortcutController: ObservableObject {
         if let recordingMonitor { NSEvent.removeMonitor(recordingMonitor) }
         recordingMonitor = nil
         saveRecording = nil
-        recordingCurrentAppOnly = nil
+        recordingKind = nil
         recordingErrorKey = nil
     }
 
     private func record(_ event: NSEvent) {
-        guard recordingCurrentAppOnly != nil, !event.isARepeat else { return }
+        guard recordingKind != nil, !event.isARepeat else { return }
         if event.keyCode == 53 {
             cancelRecording()
         } else if let shortcut = KeyboardShortcut(event: event) {
@@ -240,7 +252,7 @@ final class ShortcutController: ObservableObject {
         }
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
 
-        if recordingCurrentAppOnly != nil {
+        if recordingKind != nil {
             // Defer AppKit/UI work until after the event tap returns, and swallow even ⌘Tab.
             if let keyEvent = NSEvent(cgEvent: event) {
                 DispatchQueue.main.async { [weak self] in self?.record(keyEvent) }
@@ -249,6 +261,12 @@ final class ShortcutController: ObservableObject {
         }
 
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        // Sidebar reveal is a one-shot (not part of the switcher state machine); swallow the key.
+        if !state.isSwitching, event.getIntegerValueField(.keyboardEventAutorepeat) == 0,
+           let reveal = onRevealSidebar, sidebarShortcut.matches(keyCode: keyCode, flags: flags) {
+            DispatchQueue.main.async { reveal() }
+            return nil
+        }
         guard onAction != nil else { return Unmanaged.passUnretained(event) }
         let characters = state.isSwitching ? NSEvent(cgEvent: event).flatMap(Self.searchCharacters) : nil
         guard let action = keyAction(keyCode: keyCode, flags: flags, characters: characters) else {
@@ -345,8 +363,9 @@ final class ShortcutController: ObservableObject {
 
     static func selfCheck() -> Bool {
         var state = ShortcutState()
-        guard KeyboardShortcut.allWindows.display == "⌘Tab",
+        guard KeyboardShortcut.allWindows.display == "⌃⌥⌘F12",
               KeyboardShortcut.currentApp.display == "⌘`",
+              KeyboardShortcut.sidebar.display == "⌘Tab",
               state.begin(currentAppOnly: false, reverse: false, allowed: false) == nil,
               state.begin(currentAppOnly: false, reverse: false, allowed: true) == .begin(currentAppOnly: false, reverse: false),
               state.step(1) == .step(1),
@@ -355,14 +374,15 @@ final class ShortcutController: ObservableObject {
               state.finish(commit: true) == .commit,
               state.finish(commit: true) == nil else { return false }
 
+        let all: CGEventFlags = [.maskControl, .maskAlternate, .maskCommand]
         let controller = ShortcutController()
-        guard controller.keyAction(keyCode: 48, flags: []) == nil,
-              controller.keyAction(keyCode: 48, flags: [.maskCommand, .maskControl]) == nil,
-              controller.keyAction(keyCode: 48, flags: [.maskCommand, .maskShift])
+        guard controller.keyAction(keyCode: 111, flags: []) == nil,
+              controller.keyAction(keyCode: 111, flags: [.maskControl]) == nil,
+              controller.keyAction(keyCode: 111, flags: all.union(.maskShift))
                 == .begin(currentAppOnly: false, reverse: true),
-              controller.keyAction(keyCode: 48, flags: [.maskCommand, .maskShift]) == .step(-1),
+              controller.keyAction(keyCode: 111, flags: all.union(.maskShift)) == .step(-1),
               controller.keyAction(keyCode: 50, flags: .maskCommand) == .step(1),
-              controller.modifierAction(flags: [.maskCommand, .maskShift]) == nil,
+              controller.modifierAction(flags: all) == nil,
               controller.modifierAction(flags: .maskShift) == .commit,
               controller.keyAction(keyCode: 50, flags: .maskCommand)
                 == .begin(currentAppOnly: true, reverse: false),
@@ -374,7 +394,7 @@ final class ShortcutController: ObservableObject {
               !KeyboardShortcut(keyCode: 16, modifiers: [], keyLabel: "Y").isValid,
               !KeyboardShortcut(keyCode: 16, modifiers: [.maskCommand, .maskShift], keyLabel: "Y").isValid,
               !KeyboardShortcut(keyCode: 53, modifiers: .maskCommand, keyLabel: "Esc").isValid else { return false }
-        controller.configure(allWindows: custom, currentApp: sameKey)
+        controller.configure(allWindows: custom, currentApp: sameKey, sidebar: .sidebar)
         guard controller.keyAction(keyCode: 48, flags: .maskCommand) == nil,
               controller.keyAction(keyCode: 50, flags: .maskCommand) == nil,
               controller.keyAction(keyCode: 16, flags: .maskControl) == nil,
@@ -396,9 +416,9 @@ final class ShortcutController: ObservableObject {
         guard controller.keyAction(keyCode: 16, flags: custom.modifiers) != nil else { return false }
         var cancelled = false
         controller.onAction = { cancelled = $0 == .cancel }
-        controller.configure(allWindows: .allWindows, currentApp: .currentApp)
+        controller.configure(allWindows: .allWindows, currentApp: .currentApp, sidebar: .sidebar)
         guard cancelled, controller.modifierAction(flags: []) == nil else { return false }
-        controller.configure(allWindows: .allWindows, currentApp: .allWindows)
+        controller.configure(allWindows: .allWindows, currentApp: .allWindows, sidebar: .sidebar)
         guard controller.currentAppShortcut == .currentApp else { return false }
 
         guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero,
@@ -411,20 +431,20 @@ final class ShortcutController: ObservableObject {
 
         var acceptRecording = false
         var saved: KeyboardShortcut?
-        controller.beginRecording(currentAppOnly: false) { shortcut in
+        controller.beginRecording(kind: .allWindows) { shortcut in
             guard acceptRecording else { return false }
             saved = shortcut
             return true
         }
         defer { controller.cancelRecording() }
         controller.record(event)
-        guard controller.recordingCurrentAppOnly == false,
+        guard controller.recordingKind == .allWindows,
               controller.recordingErrorKey == "The two shortcuts must be different.", saved == nil else { return false }
         acceptRecording = true
         controller.record(event)
-        guard saved == recorded, controller.recordingCurrentAppOnly == nil,
+        guard saved == recorded, controller.recordingKind == nil,
               controller.recordingMonitor == nil, controller.recordingErrorKey == nil else { return false }
-        controller.beginRecording(currentAppOnly: true) { _ in false }
+        controller.beginRecording(kind: .currentApp) { _ in false }
         guard let invalid = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                                             windowNumber: 0, context: nil, characters: "y",
                                             charactersIgnoringModifiers: "y", isARepeat: false, keyCode: 16),
@@ -432,14 +452,14 @@ final class ShortcutController: ObservableObject {
                                            windowNumber: 0, context: nil, characters: "\u{1b}",
                                            charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) else { return false }
         controller.record(invalid)
-        guard controller.recordingCurrentAppOnly == true, controller.recordingErrorKey != nil else { return false }
+        guard controller.recordingKind == .currentApp, controller.recordingErrorKey != nil else { return false }
         controller.record(escape)
-        guard controller.recordingCurrentAppOnly == nil, controller.recordingMonitor == nil,
+        guard controller.recordingKind == nil, controller.recordingMonitor == nil,
               controller.recordingErrorKey == nil else { return false }
 
         let searchController = ShortcutController()
         guard searchController.keyAction(keyCode: 13, flags: .maskCommand, characters: "w") == nil,
-              searchController.keyAction(keyCode: 48, flags: .maskCommand)
+              searchController.keyAction(keyCode: 111, flags: all)
                 == .begin(currentAppOnly: false, reverse: false),
               searchController.keyAction(keyCode: 13, flags: .maskCommand, characters: "w") == .search("w"),
               searchController.keyAction(keyCode: 12, flags: .maskCommand, characters: "q") == .search("wq"),
@@ -451,13 +471,13 @@ final class ShortcutController: ObservableObject {
               searchController.keyAction(keyCode: 122, flags: .maskCommand, characters: "\u{f704}") == nil,
               searchController.modifierAction(flags: []) == .commit,
               searchController.state.searchQuery.isEmpty,
-              searchController.keyAction(keyCode: 48, flags: .maskCommand)
+              searchController.keyAction(keyCode: 111, flags: all)
                 == .begin(currentAppOnly: false, reverse: false),
               searchController.keyAction(keyCode: 51, flags: .maskCommand) == .search(""),
               searchController.keyAction(keyCode: 0, flags: .maskCommand, characters: "a") == .search("a"),
               searchController.keyAction(keyCode: 53, flags: .maskCommand) == .cancel,
               searchController.state.searchQuery.isEmpty else { return false }
-        searchController.configure(allWindows: custom, currentApp: sameKey)
+        searchController.configure(allWindows: custom, currentApp: sameKey, sidebar: .sidebar)
         guard searchController.keyAction(keyCode: 16, flags: custom.modifiers)
                 == .begin(currentAppOnly: false, reverse: false),
               searchController.keyAction(keyCode: 0, flags: custom.modifiers, characters: "a") == .search("a"),

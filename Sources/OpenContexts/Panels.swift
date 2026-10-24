@@ -41,6 +41,7 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
     private var language: AppLanguage = .system
     private var hoverState = SidebarHoverState()
     private var hoverTimer: Timer?
+    private var revealed = false
     private var contextMenuOpen = false
     private var dragging = false
     private var sourceDragging = false
@@ -304,7 +305,7 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
                     badge: renderedBadges[window.appID],
                     showsTitle: itemDisplayMode == .iconAndTitle,
                     style: .window(id: window.id, groupID: group.id),
-                    onClick: { [weak self] in self?.onActivate(window.id) },
+                    onClick: { [weak self] in self?.onActivate(window.id); self?.clearReveal() },
                     onDraggingChanged: { [weak self] in self?.sourceDraggingChanged($0) }
                 )
                 let menu = NSMenu(title: window.id)
@@ -502,14 +503,27 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         }
     }
 
+    /// Toggles a shortcut-driven reveal of this screen's sidebar (independent of hover/mouse edge).
+    func toggleReveal() {
+        revealed.toggle()
+        layoutPanel()
+    }
+
+    func clearReveal() {
+        guard revealed else { return }
+        revealed = false
+        layoutPanel()
+    }
+
     private func layoutPanel() {
         guard enabled, hasVisibleContent else {
             hoverState = SidebarHoverState()
+            revealed = false
             if isVisible { orderOut(nil) }
             return
         }
         let frames = sidebarFrames()
-        let expanded = hoverState.isExpanded || dragging || (alwaysVisible && !fullscreen)
+        let expanded = hoverState.isExpanded || revealed || dragging || (alwaysVisible && !fullscreen)
         let target = expanded ? frames.expanded : frames.edge
         if expanded {
             if !frame.approximatelyEquals(target) { setFrame(target, display: true) }
@@ -568,6 +582,12 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
     private func updateHover(pointer: CGPoint, now: TimeInterval) {
         guard enabled, hasVisibleContent else { return }
         let frames = sidebarFrames()
+        if revealed, frames.expanded.contains(pointer) {
+            // Pointer reached the revealed sidebar — hand control to hover (stays open while inside, then collapses).
+            revealed = false
+            hoverState.reveal()
+            layoutPanel()
+        }
         if hoverState.update(pointer: pointer, edgeFrame: frames.edge, expandedFrame: frames.expanded,
                              dragging: dragging, menuOpen: contextMenuOpen, now: now) {
             layoutPanel()
