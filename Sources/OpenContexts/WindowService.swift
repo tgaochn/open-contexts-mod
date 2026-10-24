@@ -520,7 +520,8 @@ final class WindowService: ObservableObject {
                         appName: application.appName,
                         title: title,
                         documentURL: document,
-                        processID: application.processID
+                        processID: application.processID,
+                        cgWindowID: windowID
                     )
                 ))
             }

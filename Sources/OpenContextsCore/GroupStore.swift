@@ -38,7 +38,7 @@ public struct GroupRule: Identifiable, Codable, Equatable {
         case .title: return window.title
         case .app: return window.appName
         case .documentURL: return window.documentURL ?? ""
-        case .windowID: return window.id
+        case .windowID: return window.cgWindowID == 0 ? "" : String(window.cgWindowID)
         }
     }
 
@@ -294,11 +294,12 @@ public final class GroupStore: ObservableObject {
         }
         return [
             "// Candidate rules for this window — keep one line, delete the rest.",
-            "// win_id only matches during this OpenContexts session (it is a random id, reset on restart).",
+            "// win_id is the system window number: stable across app restart & sleep;",
+            "// it changes only if the window is closed/recreated or the Mac restarts.",
             line(window.title, "title"),
             line(window.appName, "app"),
             line(window.documentURL ?? "", "url"),
-            line(window.id, "win_id")
+            line(window.cgWindowID == 0 ? "" : String(window.cgWindowID), "win_id")
         ].joined(separator: "\n")
     }
 
@@ -873,11 +874,7 @@ public final class GroupStore: ObservableObject {
 
     private func positionDraggedWindow(savedID: String, in groupID: String, requested: Int) {
         guard let index = windowsByGroup[groupID]?.firstIndex(where: { $0.id == savedID }) else { return }
-        let moved = windowsByGroup[groupID]![index]
-        let key = WindowKey(appID: moved.appID, title: moved.title)
-        guard moved.pinnedPosition != nil || windowsByGroup[groupID, default: []].contains(where: {
-            $0.id != savedID && $0.appID == key.appID && $0.title == key.title && $0.pinnedPosition != nil
-        }) else { return }
+        // A manual drag pins the window at its dropped position by default (keeps it put).
         windowsByGroup[groupID]?[index].pinnedPosition = requested
     }
 
