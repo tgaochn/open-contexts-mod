@@ -320,9 +320,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func copyRule(from windowID: String) {
-        guard let json = groupStore.singleRuleJSON(forWindow: windowID) else { return }
+        guard let text = groupStore.candidateRulesText(forWindow: windowID) else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(json, forType: .string)
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private func exportGroup(_ groupID: String, toClipboard: Bool) {

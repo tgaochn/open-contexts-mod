@@ -691,6 +691,7 @@ struct GroupingRulesEditor: View {
         case .title: return L10n.text("Title", language: language)
         case .app: return L10n.text("App", language: language)
         case .documentURL: return L10n.text("URL", language: language)
+        case .windowID: return L10n.text("Window ID", language: language)
         }
     }
 

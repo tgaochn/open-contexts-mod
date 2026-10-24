@@ -15,7 +15,7 @@ public struct WindowGroup: Identifiable, Codable, Equatable {
 /// fields. Manual placement (a saved window inside a real group) always wins over
 /// rules; rules only apply to windows the user has not manually grouped.
 public struct GroupRule: Identifiable, Codable, Equatable {
-    public enum Field: String, Codable, CaseIterable { case title, app, documentURL }
+    public enum Field: String, Codable, CaseIterable { case title, app, documentURL, windowID }
     public enum MatchMode: String, Codable, CaseIterable { case fullText, regex }
 
     public let id: String
@@ -38,6 +38,7 @@ public struct GroupRule: Identifiable, Codable, Equatable {
         case .title: return window.title
         case .app: return window.appName
         case .documentURL: return window.documentURL ?? ""
+        case .windowID: return window.id
         }
     }
 
@@ -61,6 +62,7 @@ extension GroupRule.Field {
         case .title: return "title"
         case .app: return "app"
         case .documentURL: return "url"
+        case .windowID: return "win_id"
         }
     }
 
@@ -69,6 +71,7 @@ extension GroupRule.Field {
         case "title": self = .title
         case "app": self = .app
         case "url", "documenturl": self = .documentURL
+        case "win_id", "windowid": self = .windowID
         default: return nil
         }
     }
@@ -280,14 +283,23 @@ public final class GroupStore: ObservableObject {
         return true
     }
 
-    /// A single rule object to paste under a mode/group in rules.jsonc, e.g.
-    /// `{ "pattern": "…", "field": "title" }`. `field` is omitted when it is the default (title).
-    public func singleRuleJSON(forWindow id: String) -> String? {
-        guard let (rule, _) = ruleEntry(forWindow: id) else { return nil }
-        if rule.field == .title {
-            return "{ \"pattern\": \(Self.jsonString(rule.pattern)) }"
+    /// Candidate rule objects for a window — one line per field (title/app/url/win_id) — to paste
+    /// under a mode/group in rules.jsonc, keeping the one you want. Returns nil if the window is gone.
+    public func candidateRulesText(forWindow id: String) -> String? {
+        guard let window = activeWindows[id] else { return nil }
+        func line(_ value: String, _ token: String) -> String {
+            value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "// { \"pattern\": \"…\", \"field\": \"\(token)\" },   // (empty for this window)"
+                : "{ \"pattern\": \(Self.jsonString(value)), \"field\": \"\(token)\" },"
         }
-        return "{ \"pattern\": \(Self.jsonString(rule.pattern)), \"field\": \"\(rule.field.token)\" }"
+        return [
+            "// Candidate rules for this window — keep one line, delete the rest.",
+            "// win_id only matches during this OpenContexts session (it is a random id, reset on restart).",
+            line(window.title, "title"),
+            line(window.appName, "app"),
+            line(window.documentURL ?? "", "url"),
+            line(window.id, "win_id")
+        ].joined(separator: "\n")
     }
 
     public func updateRule(_ rule: GroupRule) {

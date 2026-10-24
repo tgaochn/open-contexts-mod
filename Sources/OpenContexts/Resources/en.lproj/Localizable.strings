@@ -87,3 +87,4 @@
 "Rules are edited in the file below. Priority: manual drag, then fulltext, then regex." = "Rules are edited in the file below. Priority: manual drag, then fulltext, then regex.";
 "No rules loaded. Edit the file, then Reload from file." = "No rules loaded. Edit the file, then Reload from file.";
 "Copy rule for window" = "Copy rule for window";
+"Window ID" = "Window ID";

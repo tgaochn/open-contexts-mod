@@ -87,3 +87,4 @@
 "Rules are edited in the file below. Priority: manual drag, then fulltext, then regex." = "Les règles se modifient dans le fichier ci-dessous. Priorité : glisser manuel, puis texte complet, puis regex.";
 "No rules loaded. Edit the file, then Reload from file." = "Aucune règle chargée. Modifiez le fichier, puis Recharger depuis le fichier.";
 "Copy rule for window" = "Copier la règle de la fenêtre";
+"Window ID" = "ID de fenêtre";
