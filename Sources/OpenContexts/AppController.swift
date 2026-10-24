@@ -32,6 +32,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        configureMainMenu()
         configureMenuBar()
         configureShortcuts()
         observeState()
@@ -275,6 +276,31 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         currentAppOnly = nil
         currentAppPID = nil
         if let id { windowService.activate(id) }
+    }
+
+    /// Accessory apps show no menu bar, but without an Edit menu the standard text shortcuts
+    /// (⌘C/⌘V/⌘X/⌘A/⌘Z) have no responder and just beep in text fields (e.g. the rename dialog).
+    /// A hidden main menu with an Edit submenu routes those key equivalents to the field editor.
+    private func configureMainMenu() {
+        let mainMenu = NSMenu()
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        func add(_ title: String, _ selector: String, _ key: String,
+                 _ modifiers: NSEvent.ModifierFlags = .command) {
+            let item = editMenu.addItem(withTitle: title, action: NSSelectorFromString(selector),
+                                        keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+        }
+        add("Undo", "undo:", "z")
+        add("Redo", "redo:", "z", [.command, .shift])
+        editMenu.addItem(.separator())
+        add("Cut", "cut:", "x")
+        add("Copy", "copy:", "c")
+        add("Paste", "paste:", "v")
+        add("Select All", "selectAll:", "a")
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+        NSApp.mainMenu = mainMenu
     }
 
     private func configureMenuBar() {
