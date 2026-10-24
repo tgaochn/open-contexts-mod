@@ -291,22 +291,40 @@ public final class GroupStore: ObservableObject {
         guard let (rule, name) = ruleEntry(forWindow: id) else {
             return ["no rule could be created for this window"]
         }
-        var file = RuleFile(rules: [])
-        if let data = try? Data(contentsOf: rulesFileURL),
-           let text = String(data: data, encoding: .utf8),
-           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            do {
-                file = try JSONDecoder().decode(RuleFile.self, from: data)
-            } catch {
-                return ["rules.json has a parse error, not modified: \(error.localizedDescription)"]
-            }
+        let entry = RuleFileEntry(field: rule.field.token, mode: rule.mode.token,
+                                  pattern: rule.pattern, group: name)
+        // Compact one-line object so it can be inserted into the array as text.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes, .sortedKeys]
+        guard let entryData = try? encoder.encode(entry),
+              let entryText = String(data: entryData, encoding: .utf8) else {
+            return ["could not encode rule"]
         }
-        file.rules.append(RuleFileEntry(field: rule.field.token, mode: rule.mode.token,
-                                        pattern: rule.pattern, group: name))
+
+        let existing = (try? String(contentsOf: rulesFileURL, encoding: .utf8)) ?? ""
+        let newText: String
+        if Self.decommented(existing).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            newText = Self.rulesFileHeader + "{\n  \"rules\": [\n    \(entryText)\n  ]\n}\n"
+        } else {
+            // Validate it parses (as JSONC), then insert the entry as text so comments survive.
+            guard let data = Self.decommented(existing).data(using: .utf8),
+                  (try? JSONDecoder().decode(RuleFile.self, from: data)) != nil else {
+                return ["rules.json has a parse error, not modified"]
+            }
+            guard let bracket = existing.lastIndex(of: "]") else {
+                return ["rules.json is not in the expected { \"rules\": [ … ] } shape"]
+            }
+            let head = String(existing[..<bracket])
+            let tail = String(existing[bracket...])
+            let last = Self.decommented(head).trimmingCharacters(in: .whitespacesAndNewlines).last
+            let separator = (last == "[" || last == ",") ? "" : ","
+            newText = head + separator + "\n    \(entryText)\n  " + tail
+        }
+
         do {
             try FileManager.default.createDirectory(at: rulesFileURL.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
-            try Self.encodeRuleFile(file).write(to: rulesFileURL, atomically: true, encoding: .utf8)
+            try newText.write(to: rulesFileURL, atomically: true, encoding: .utf8)
         } catch {
             return ["write failed: \(error.localizedDescription)"]
         }
@@ -352,7 +370,7 @@ public final class GroupStore: ObservableObject {
             RuleFileEntry(field: $0.field.token, mode: $0.mode.token,
                           pattern: $0.pattern, group: nameByID[$0.groupID] ?? $0.groupID)
         }
-        return Self.encodeRuleFile(RuleFile(rules: entries))
+        return Self.encodeRuleFile(RuleFile(rules: entries), header: true)
     }
 
     /// Exports the CURRENT per-window grouping (manual drags + rule-settled windows that have been
@@ -364,12 +382,12 @@ public final class GroupStore: ObservableObject {
         for group in groups where group.id != Self.ungroupedID {
             entries.append(contentsOf: groupMappingEntries(groupID: group.id))
         }
-        return Self.encodeRuleFile(RuleFile(rules: entries))
+        return Self.encodeRuleFile(RuleFile(rules: entries), header: true)
     }
 
     /// Exports one group's windows as a rules template (one `title`/`fulltext` entry per window).
     public func exportGroupMappingJSON(groupID: String) -> String {
-        Self.encodeRuleFile(RuleFile(rules: groupMappingEntries(groupID: groupID)))
+        Self.encodeRuleFile(RuleFile(rules: groupMappingEntries(groupID: groupID)), header: true)
     }
 
     private func groupMappingEntries(groupID: String) -> [RuleFileEntry] {
@@ -384,25 +402,98 @@ public final class GroupStore: ObservableObject {
         return entries
     }
 
-    private static func encodeRuleFile(_ file: RuleFile) -> String {
+    static let rulesFileHeader = """
+    // OpenContexts grouping rules (JSONC): // and /* */ comments and trailing commas are allowed.
+    // field: title | app | url   mode: fulltext | regex   group: <group name>
+
+    """
+
+    private static func encodeRuleFile(_ file: RuleFile, header: Bool = false) -> String {
+        let prefix = header ? rulesFileHeader : ""
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(file), let text = String(data: data, encoding: .utf8) else {
-            return "{\n  \"rules\": []\n}\n"
+            return prefix + "{\n  \"rules\": []\n}\n"
         }
-        return text + "\n"
+        return prefix + text + "\n"
+    }
+
+    /// Makes JSONC parseable by strict JSON: strips `//` and `/* */` comments and trailing commas,
+    /// while leaving the contents of string literals (e.g. `https://`, `[a,b]`) untouched.
+    public static func decommented(_ text: String) -> String {
+        removeTrailingCommas(stripJSONComments(text))
+    }
+
+    private static func stripJSONComments(_ text: String) -> String {
+        enum S { case normal, string, line, block }
+        var state = S.normal
+        var out = ""
+        let chars = Array(text)
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            let n: Character = i + 1 < chars.count ? chars[i + 1] : "\0"
+            switch state {
+            case .normal:
+                if c == "\"" { state = .string; out.append(c); i += 1 }
+                else if c == "/" && n == "/" { state = .line; i += 2 }
+                else if c == "/" && n == "*" { state = .block; i += 2 }
+                else { out.append(c); i += 1 }
+            case .string:
+                if c == "\\" {
+                    out.append(c)
+                    if i + 1 < chars.count { out.append(chars[i + 1]) }
+                    i += 2
+                } else if c == "\"" {
+                    state = .normal; out.append(c); i += 1
+                } else {
+                    out.append(c); i += 1
+                }
+            case .line:
+                if c == "\n" { state = .normal; out.append(c); i += 1 } else { i += 1 }
+            case .block:
+                if c == "*" && n == "/" { state = .normal; i += 2 } else { i += 1 }
+            }
+        }
+        return out
+    }
+
+    private static func removeTrailingCommas(_ text: String) -> String {
+        var out = ""
+        let chars = Array(text)
+        var i = 0
+        var inString = false
+        while i < chars.count {
+            let c = chars[i]
+            if inString {
+                out.append(c)
+                if c == "\\", i + 1 < chars.count { out.append(chars[i + 1]); i += 2; continue }
+                if c == "\"" { inString = false }
+                i += 1
+            } else if c == "\"" {
+                inString = true; out.append(c); i += 1
+            } else if c == "," {
+                var j = i + 1
+                while j < chars.count, chars[j].isWhitespace { j += 1 }
+                if j < chars.count, chars[j] == "]" || chars[j] == "}" { i += 1 }
+                else { out.append(c); i += 1 }
+            } else {
+                out.append(c); i += 1
+            }
+        }
+        return out
     }
 
     /// Replaces all rules from the JSON format. Returns problems (empty = applied cleanly).
     /// On any parse or validation error nothing is changed, so a typo can't silently wipe rules.
     @discardableResult
     public func importRules(fromJSON text: String) -> [String] {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
+        let cleaned = Self.decommented(text).trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty {
             if !rules.isEmpty { rules = []; rulesChanged() }
             return []
         }
-        guard let data = trimmed.data(using: .utf8) else { return ["invalid text encoding"] }
+        guard let data = cleaned.data(using: .utf8) else { return ["invalid text encoding"] }
         let file: RuleFile
         do {
             file = try JSONDecoder().decode(RuleFile.self, from: data)
