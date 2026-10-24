@@ -1,7 +1,7 @@
 MOD 版本的改动:
 
 1. 使用 CGWindowID 作为 win_id 代替 AXUIElement, 手动分组更稳定, 休眠后不会变动分组
-2. 增加使用 title 正则匹配分组, 用 jsonc 管理 grouping 方式; 添加从 窗口/group 上提取 json block 的方式方便编辑文件; 增加 UI 展示 grouping map
+2. 增加使用 title 正则匹配分组, 用 jsonc 文件管理 grouping map; 添加按钮从 窗口/group 上提取 json block, 方便编辑文件; 增加软件 UI 展示 grouping map
 3. 手动分组的时候默认激活固定
 4. 添加快捷键激活侧边栏
 5. 修复 group rename 的时候不能使用快捷键复制粘贴的 issue
