@@ -280,65 +280,14 @@ public final class GroupStore: ObservableObject {
         return true
     }
 
-    /// JSON for a SINGLE rule pre-filled from a window (one object, to paste into a rules array).
-    /// Returns nil when no rule can be made (no live window / no real group).
+    /// A single rule object to paste under a mode/group in rules.jsonc, e.g.
+    /// `{ "pattern": "…", "field": "title" }`. `field` is omitted when it is the default (title).
     public func singleRuleJSON(forWindow id: String) -> String? {
-        guard let (rule, name) = ruleEntry(forWindow: id) else { return nil }
-        let entry = RuleFileEntry(field: rule.field.token, mode: rule.mode.token,
-                                  pattern: rule.pattern, group: name)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(entry), let text = String(data: data, encoding: .utf8) else {
-            return nil
+        guard let (rule, _) = ruleEntry(forWindow: id) else { return nil }
+        if rule.field == .title {
+            return "{ \"pattern\": \(Self.jsonString(rule.pattern)) }"
         }
-        return text
-    }
-
-    /// Appends a window's rule to the rules.json file (merging with what's on disk). Returns problems
-    /// (empty = appended). Leaves the file untouched if it exists but doesn't parse.
-    @discardableResult
-    public func appendRuleFromWindowToFile(id: String) -> [String] {
-        guard let (rule, name) = ruleEntry(forWindow: id) else {
-            return ["no rule could be created for this window"]
-        }
-        let entry = RuleFileEntry(field: rule.field.token, mode: rule.mode.token,
-                                  pattern: rule.pattern, group: name)
-        // Compact one-line object so it can be inserted into the array as text.
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.withoutEscapingSlashes, .sortedKeys]
-        guard let entryData = try? encoder.encode(entry),
-              let entryText = String(data: entryData, encoding: .utf8) else {
-            return ["could not encode rule"]
-        }
-
-        let existing = (try? String(contentsOf: rulesFileURL, encoding: .utf8)) ?? ""
-        let newText: String
-        if Self.decommented(existing).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            newText = Self.rulesFileHeader + "{\n  \"rules\": [\n    \(entryText)\n  ]\n}\n"
-        } else {
-            // Validate it parses (as JSONC), then insert the entry as text so comments survive.
-            guard let data = Self.decommented(existing).data(using: .utf8),
-                  (try? JSONDecoder().decode(RuleFile.self, from: data)) != nil else {
-                return ["rules.json has a parse error, not modified"]
-            }
-            guard let bracket = existing.lastIndex(of: "]") else {
-                return ["rules.json is not in the expected { \"rules\": [ … ] } shape"]
-            }
-            let head = String(existing[..<bracket])
-            let tail = String(existing[bracket...])
-            let last = Self.decommented(head).trimmingCharacters(in: .whitespacesAndNewlines).last
-            let separator = (last == "[" || last == ",") ? "" : ","
-            newText = head + separator + "\n    \(entryText)\n  " + tail
-        }
-
-        do {
-            try FileManager.default.createDirectory(at: rulesFileURL.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            try newText.write(to: rulesFileURL, atomically: true, encoding: .utf8)
-        } catch {
-            return ["write failed: \(error.localizedDescription)"]
-        }
-        return []
+        return "{ \"pattern\": \(Self.jsonString(rule.pattern)), \"field\": \"\(rule.field.token)\" }"
     }
 
     public func updateRule(_ rule: GroupRule) {
@@ -363,69 +312,76 @@ public final class GroupStore: ObservableObject {
         fileURL.deletingLastPathComponent().appendingPathComponent("rules.jsonc")
     }
 
-    private struct RuleFileEntry: Codable {
-        var field: String
-        var mode: String
-        var pattern: String
-        var group: String
-    }
-
-    private struct RuleFile: Codable {
-        var rules: [RuleFileEntry]
-    }
-
-    public func exportRulesJSON() -> String {
-        let nameByID = Dictionary(groups.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
-        let entries = rules.map {
-            RuleFileEntry(field: $0.field.token, mode: $0.mode.token,
-                          pattern: $0.pattern, group: nameByID[$0.groupID] ?? $0.groupID)
-        }
-        return Self.encodeRuleFile(RuleFile(rules: entries), header: true)
-    }
+    public func exportRulesJSONC() -> String { exportNested(rules) }
 
     /// Exports the CURRENT per-window grouping (manual drags + rule-settled windows that have been
     /// persisted) as a rules template: one `title`/`fulltext` entry per grouped window. Lets you
-    /// start from your real layout and tweak it (turn volatile ones into regex, delete noise)
-    /// instead of writing the mapping from scratch.
+    /// start from your real layout and tweak it (shorten to regex, delete noise) instead of
+    /// writing the mapping from scratch.
     public func exportCurrentMappingJSON() -> String {
-        var entries: [RuleFileEntry] = []
+        var entries: [GroupRule] = []
         for group in groups where group.id != Self.ungroupedID {
             entries.append(contentsOf: groupMappingEntries(groupID: group.id))
         }
-        return Self.encodeRuleFile(RuleFile(rules: entries), header: true)
+        return exportNested(entries)
     }
 
     /// Exports one group's windows as a rules template (one `title`/`fulltext` entry per window).
     public func exportGroupMappingJSON(groupID: String) -> String {
-        Self.encodeRuleFile(RuleFile(rules: groupMappingEntries(groupID: groupID)), header: true)
+        exportNested(groupMappingEntries(groupID: groupID))
     }
 
-    private func groupMappingEntries(groupID: String) -> [RuleFileEntry] {
-        let name = groups.first(where: { $0.id == groupID })?.name ?? groupID
-        var entries: [RuleFileEntry] = []
+    private func groupMappingEntries(groupID: String) -> [GroupRule] {
+        var entries: [GroupRule] = []
         var seen = Set<String>()
         for saved in windowsByGroup[groupID, default: []] {
             let title = saved.title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty, seen.insert(title).inserted else { continue }
-            entries.append(RuleFileEntry(field: "title", mode: "fulltext", pattern: saved.title, group: name))
+            entries.append(GroupRule(field: .title, mode: .fullText, pattern: saved.title, groupID: groupID))
         }
         return entries
     }
 
     static let rulesFileHeader = """
-    // OpenContexts grouping rules (JSONC): // and /* */ comments and trailing commas are allowed.
-    // field: title | app | url   mode: fulltext | regex   group: <group name>
+    // OpenContexts grouping rules (JSONC): // and /* */ comments and trailing commas allowed.
+    // Shape: rules -> mode (regex | fulltext) -> group name -> list of { "pattern": "…", "field": … }
+    //   "pattern" = the text or regex to match.
+    //   "field"   = which text to match: title | app | url. Optional; defaults to "title".
+    // Priority: a manual drag wins; then fulltext rules; then regex rules.
+    // example:
+    //   { "rules": { "regex": { "doc": [ { "pattern": "4_indeed" } ] } } }
 
     """
 
-    private static func encodeRuleFile(_ file: RuleFile, header: Bool = false) -> String {
-        let prefix = header ? rulesFileHeader : ""
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(file), let text = String(data: data, encoding: .utf8) else {
-            return prefix + "{\n  \"rules\": []\n}\n"
+    /// JSON string literal for `s` (quotes + escaping), keeping slashes and UTF-8 unescaped.
+    private static func jsonString(_ s: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: [s]),
+              let text = String(data: data, encoding: .utf8), text.count >= 2 else { return "\"\"" }
+        return String(text.dropFirst().dropLast())
+    }
+
+    /// Serializes rules into the nested JSONC shape: rules -> mode -> group name -> [ {pattern, field?} ].
+    private func exportNested(_ rules: [GroupRule]) -> String {
+        var modeBlocks: [String] = []
+        for mode in [GroupRule.MatchMode.regex, .fullText] {
+            let ofMode = rules.filter { $0.mode == mode }
+            guard !ofMode.isEmpty else { continue }
+            var groupBlocks: [String] = []
+            for group in groups where group.id != Self.ungroupedID {
+                let ofGroup = ofMode.filter { $0.groupID == group.id }
+                guard !ofGroup.isEmpty else { continue }
+                let entryLines = ofGroup.map { rule -> String in
+                    rule.field == .title
+                        ? "        { \"pattern\": \(Self.jsonString(rule.pattern)) }"
+                        : "        { \"pattern\": \(Self.jsonString(rule.pattern)), \"field\": \"\(rule.field.token)\" }"
+                }
+                groupBlocks.append("      \(Self.jsonString(group.name)): [\n"
+                                   + entryLines.joined(separator: ",\n") + "\n      ]")
+            }
+            modeBlocks.append("    \"\(mode.token)\": {\n" + groupBlocks.joined(separator: ",\n") + "\n    }")
         }
-        return prefix + text + "\n"
+        return Self.rulesFileHeader + "{\n  \"rules\": {\n"
+            + modeBlocks.joined(separator: ",\n") + "\n  }\n}\n"
     }
 
     /// Makes JSONC parseable by strict JSON: strips `//` and `/* */` comments and trailing commas,
@@ -494,46 +450,105 @@ public final class GroupStore: ObservableObject {
         return out
     }
 
-    /// Replaces all rules from the JSON format. Returns problems (empty = applied cleanly).
-    /// On any parse or validation error nothing is changed, so a typo can't silently wipe rules.
+    /// Replaces all rules from the nested JSONC format (also accepts the legacy flat array).
+    /// On any parse/validation error nothing is changed, so a typo can't silently wipe rules.
     @discardableResult
-    public func importRules(fromJSON text: String) -> [String] {
+    public func importRules(fromJSONC text: String) -> [String] {
         let cleaned = Self.decommented(text).trimmingCharacters(in: .whitespacesAndNewlines)
         if cleaned.isEmpty {
             if !rules.isEmpty { rules = []; rulesChanged() }
             return []
         }
-        guard let data = cleaned.data(using: .utf8) else { return ["invalid text encoding"] }
-        let file: RuleFile
-        do {
-            file = try JSONDecoder().decode(RuleFile.self, from: data)
-        } catch {
-            return ["JSON parse error: \(error.localizedDescription)"]
+        guard let data = cleaned.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let rulesAny = root["rules"] else {
+            return ["parse error: expected an object with a \"rules\" key"]
         }
         let idByName = Dictionary(
             groups.filter { $0.id != Self.ungroupedID }.map { ($0.name, $0.id) },
             uniquingKeysWith: { first, _ in first }
         )
-        var parsed: [GroupRule] = []
         var errors: [String] = []
-        for (index, entry) in file.rules.enumerated() {
-            let number = index + 1
-            guard let field = GroupRule.Field(token: entry.field) else {
-                errors.append("rule \(number): unknown field \"\(entry.field)\" (use title/app/url)"); continue
+        var collected: [(mode: GroupRule.MatchMode, groupID: String, field: GroupRule.Field, pattern: String)] = []
+
+        func addEntry(mode: GroupRule.MatchMode, groupName: String, groupID: String, index: Int, _ entry: Any) {
+            let field: GroupRule.Field
+            let pattern: String
+            if let text = entry as? String {
+                field = .title; pattern = text
+            } else if let obj = entry as? [String: Any] {
+                guard let p = obj["pattern"] as? String else {
+                    errors.append("\(mode.token)/\(groupName)[\(index)]: missing \"pattern\""); return
+                }
+                pattern = p
+                if let f = obj["field"] as? String {
+                    guard let parsed = GroupRule.Field(token: f) else {
+                        errors.append("\(mode.token)/\(groupName)[\(index)]: unknown field \"\(f)\" (use title/app/url)"); return
+                    }
+                    field = parsed
+                } else { field = .title }
+            } else {
+                errors.append("\(mode.token)/\(groupName)[\(index)]: must be a string or an object"); return
             }
-            guard let mode = GroupRule.MatchMode(token: entry.mode) else {
-                errors.append("rule \(number): unknown mode \"\(entry.mode)\" (use fulltext/regex)"); continue
+            guard !pattern.trimmingCharacters(in: .whitespaces).isEmpty else {
+                errors.append("\(mode.token)/\(groupName)[\(index)]: empty pattern"); return
             }
-            guard !entry.pattern.trimmingCharacters(in: .whitespaces).isEmpty else {
-                errors.append("rule \(number): empty pattern"); continue
+            collected.append((mode, groupID, field, pattern))
+        }
+
+        if let nested = rulesAny as? [String: Any] {
+            for (modeToken, byGroupAny) in nested {
+                guard let mode = GroupRule.MatchMode(token: modeToken) else {
+                    errors.append("unknown mode \"\(modeToken)\" (use fulltext/regex)"); continue
+                }
+                guard let byGroup = byGroupAny as? [String: Any] else {
+                    errors.append("\"\(modeToken)\" must map group names to lists"); continue
+                }
+                for (groupName, entriesAny) in byGroup {
+                    guard let groupID = idByName[groupName] else {
+                        errors.append("group not found: \"\(groupName)\""); continue
+                    }
+                    guard let entries = entriesAny as? [Any] else {
+                        errors.append("\(modeToken)/\(groupName) must be a list"); continue
+                    }
+                    for (j, entry) in entries.enumerated() {
+                        addEntry(mode: mode, groupName: groupName, groupID: groupID, index: j + 1, entry)
+                    }
+                }
             }
-            guard let groupID = idByName[entry.group] else {
-                errors.append("rule \(number): group not found: \"\(entry.group)\""); continue
+        } else if let flat = rulesAny as? [[String: Any]] {
+            for (i, obj) in flat.enumerated() {
+                let n = i + 1
+                guard let fieldToken = obj["field"] as? String, let field = GroupRule.Field(token: fieldToken) else {
+                    errors.append("rule \(n): unknown or missing \"field\" (use title/app/url)"); continue
+                }
+                guard let modeToken = obj["mode"] as? String, let mode = GroupRule.MatchMode(token: modeToken) else {
+                    errors.append("rule \(n): unknown or missing \"mode\" (use fulltext/regex)"); continue
+                }
+                guard let pattern = obj["pattern"] as? String,
+                      !pattern.trimmingCharacters(in: .whitespaces).isEmpty else {
+                    errors.append("rule \(n): missing/empty \"pattern\""); continue
+                }
+                guard let groupName = obj["group"] as? String, let groupID = idByName[groupName] else {
+                    errors.append("rule \(n): group not found"); continue
+                }
+                collected.append((mode, groupID, field, pattern))
             }
-            parsed.append(GroupRule(field: field, mode: mode, pattern: entry.pattern, groupID: groupID))
+        } else {
+            return ["\"rules\" must be an object (nested) or an array (flat)"]
         }
         guard errors.isEmpty else { return errors }
-        rules = parsed
+        // Deterministic order / priority: fulltext before regex, then sidebar group order, then entry order.
+        let groupIndex = Dictionary(uniqueKeysWithValues: groups.enumerated().map { ($0.element.id, $0.offset) })
+        let ordered = collected.enumerated().sorted { lhs, rhs in
+            let a = lhs.element, b = rhs.element
+            let ma = a.mode == .fullText ? 0 : 1, mb = b.mode == .fullText ? 0 : 1
+            if ma != mb { return ma < mb }
+            let ga = groupIndex[a.groupID] ?? .max, gb = groupIndex[b.groupID] ?? .max
+            if ga != gb { return ga < gb }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+        rules = ordered.map { GroupRule(field: $0.field, mode: $0.mode, pattern: $0.pattern, groupID: $0.groupID) }
         rulesChanged()
         return []
     }

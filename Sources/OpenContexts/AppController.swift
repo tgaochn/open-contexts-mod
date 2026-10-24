@@ -142,7 +142,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 onCreateGroup: { [weak self] in self?.groupStore.createGroup(name: $0) },
                 onRenameGroup: { [weak self] id, name in self?.groupStore.renameGroup(id: id, name: name) },
                 onDeleteGroup: { [weak self] in self?.groupStore.deleteGroup(id: $0) },
-                onCreateRule: { [weak self] id, toClipboard in self?.createRule(from: id, toClipboard: toClipboard) },
+                onCreateRule: { [weak self] id in self?.copyRule(from: id) },
                 onExportGroup: { [weak self] groupID, toClipboard in self?.exportGroup(groupID, toClipboard: toClipboard) }
             )
             switchers[id] = SwitcherPanel(
@@ -319,25 +319,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    private func createRule(from windowID: String, toClipboard: Bool) {
-        if toClipboard {
-            guard let json = groupStore.singleRuleJSON(forWindow: windowID) else { return }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(json, forType: .string)
-        } else {
-            let errors = groupStore.appendRuleFromWindowToFile(id: windowID)
-            if errors.isEmpty {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                process.arguments = ["-t", groupStore.rulesFileURL.path]
-                try? process.run()
-            } else {
-                let alert = NSAlert()
-                alert.messageText = L10n.text("Could not add rule", language: settings.language)
-                alert.informativeText = errors.joined(separator: "\n")
-                alert.runModal()
-            }
-        }
+    private func copyRule(from windowID: String) {
+        guard let json = groupStore.singleRuleJSON(forWindow: windowID) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(json, forType: .string)
     }
 
     private func exportGroup(_ groupID: String, toClipboard: Bool) {

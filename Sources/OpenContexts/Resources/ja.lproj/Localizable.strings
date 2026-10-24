@@ -84,3 +84,6 @@
 "Copy to clipboard" = "クリップボードにコピー";
 "Export group…" = "グループを書き出す…";
 "Show sidebar" = "サイドバーを表示";
+"Rules are edited in the file below. Priority: manual drag, then fulltext, then regex." = "ルールは下のファイルで編集します。優先順位：手動ドラッグ → 完全一致 → 正規表現。";
+"No rules loaded. Edit the file, then Reload from file." = "ルールが読み込まれていません。ファイルを編集してから「ファイルから再読み込み」。";
+"Copy rule for window" = "このウインドウのルールをコピー";

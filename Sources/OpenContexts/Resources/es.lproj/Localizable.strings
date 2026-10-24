@@ -84,3 +84,6 @@
 "Copy to clipboard" = "Copiar al portapapeles";
 "Export group…" = "Exportar grupo…";
 "Show sidebar" = "Mostrar barra lateral";
+"Rules are edited in the file below. Priority: manual drag, then fulltext, then regex." = "Las reglas se editan en el archivo de abajo. Prioridad: arrastre manual, luego texto completo, luego regex.";
+"No rules loaded. Edit the file, then Reload from file." = "No hay reglas cargadas. Edita el archivo y luego Recargar desde archivo.";
+"Copy rule for window" = "Copiar regla de la ventana";

@@ -564,26 +564,18 @@ struct GroupingRulesEditor: View {
     var language: AppLanguage
     @State private var importErrors: [String] = []
 
-    private var realGroups: [OpenContextsCore.WindowGroup] {
-        groupStore.groups.filter { $0.id != GroupStore.ungroupedID }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(L10n.text("Rules route a window into a group by matching text. Manual drag always wins.",
+            Text(L10n.text("Rules are edited in the file below. Priority: manual drag, then fulltext, then regex.",
                            language: language))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
-                Button {
-                    openInExternalEditor()
-                } label: {
+                Button { openInExternalEditor() } label: {
                     Label(L10n.text("Edit as text…", language: language), systemImage: "square.and.pencil")
                 }
-                Button {
-                    reloadFromFile()
-                } label: {
+                Button { reloadFromFile() } label: {
                     Label(L10n.text("Reload from file", language: language), systemImage: "arrow.clockwise")
                 }
                 Menu {
@@ -611,69 +603,34 @@ struct GroupingRulesEditor: View {
                 }
             }
 
-            if !groupStore.rules.isEmpty || !realGroups.isEmpty {
-                Divider().padding(.vertical, 2)
-            }
+            Divider().padding(.vertical, 2)
 
-            ForEach(groupStore.rules) { rule in
-                ruleRow(rule)
-            }
-            Button {
-                groupStore.addRule()
-            } label: {
-                Label(L10n.text("Add rule", language: language), systemImage: "plus")
-            }
-            .controlSize(.small)
-            .disabled(realGroups.isEmpty)
-            if realGroups.isEmpty {
-                Text(L10n.text("Create a group first to add rules.", language: language))
+            if groupStore.rules.isEmpty {
+                Text(L10n.text("No rules loaded. Edit the file, then Reload from file.", language: language))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(groupStore.rules) { rule in ruleRow(rule) }
+                }
             }
         }
     }
 
     private func ruleRow(_ rule: GroupRule) -> some View {
-        HStack(spacing: 6) {
-            Picker("", selection: binding(rule, \.field)) {
-                ForEach(GroupRule.Field.allCases, id: \.self) { field in
-                    Text(name(field)).tag(field)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 72)
-
-            Picker("", selection: binding(rule, \.mode)) {
-                ForEach(GroupRule.MatchMode.allCases, id: \.self) { mode in
-                    Text(name(mode)).tag(mode)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 84)
-
-            TextField(L10n.text("Pattern", language: language), text: binding(rule, \.pattern))
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: .infinity)
-
+        HStack(spacing: 8) {
+            Text(name(rule.mode)).frame(width: 52, alignment: .leading).foregroundStyle(.secondary)
+            Text(name(rule.field)).frame(width: 40, alignment: .leading).foregroundStyle(.secondary)
+            Text(rule.pattern).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 4)
             Text("→").foregroundStyle(.secondary)
-
-            Picker("", selection: binding(rule, \.groupID)) {
-                ForEach(realGroups) { group in
-                    Text(group.name).tag(group.id)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 96)
-
-            Button {
-                groupStore.removeRule(id: rule.id)
-            } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
-            .help(L10n.text("Delete", language: language))
+            Text(groupName(rule.groupID))
         }
-        .controlSize(.small)
+        .font(.system(size: 12))
+    }
+
+    private func groupName(_ id: String) -> String {
+        groupStore.groups.first { $0.id == id }?.name ?? id
     }
 
     private func openInExternalEditor() {
@@ -681,16 +638,13 @@ struct GroupingRulesEditor: View {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
-            try groupStore.exportRulesJSON().write(to: url, atomically: true, encoding: .utf8)
+            try groupStore.exportRulesJSONC().write(to: url, atomically: true, encoding: .utf8)
         } catch {
             importErrors = ["write failed: \(error.localizedDescription)"]
             return
         }
         importErrors = []
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-t", url.path]
-        try? process.run()
+        openInTextEditor(url)
     }
 
     private func reloadFromFile() {
@@ -699,12 +653,12 @@ struct GroupingRulesEditor: View {
             importErrors = ["read failed: \(url.path)"]
             return
         }
-        importErrors = groupStore.importRules(fromJSON: text)
+        importErrors = groupStore.importRules(fromJSONC: text)
     }
 
     private func exportCurrentGroupingToFile() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "rules.json"
+        panel.nameFieldStringValue = "rules.jsonc"
         panel.directoryURL = groupStore.rulesFileURL.deletingLastPathComponent()
         panel.message = L10n.text("Save your current grouping as an editable rules template.",
                                   language: language)
@@ -716,10 +670,7 @@ struct GroupingRulesEditor: View {
             return
         }
         importErrors = []
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-t", url.path]
-        try? process.run()
+        openInTextEditor(url)
     }
 
     private func copyCurrentGroupingToClipboard() {
@@ -728,16 +679,11 @@ struct GroupingRulesEditor: View {
         importErrors = []
     }
 
-    private func binding<Value>(_ rule: GroupRule,
-                                _ keyPath: WritableKeyPath<GroupRule, Value>) -> Binding<Value> {
-        Binding(
-            get: { rule[keyPath: keyPath] },
-            set: { newValue in
-                var updated = rule
-                updated[keyPath: keyPath] = newValue
-                groupStore.updateRule(updated)
-            }
-        )
+    private func openInTextEditor(_ url: URL) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-t", url.path]
+        try? process.run()
     }
 
     private func name(_ field: GroupRule.Field) -> String {

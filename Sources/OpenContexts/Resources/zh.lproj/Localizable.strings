@@ -84,3 +84,6 @@
 "Copy to clipboard" = "复制到剪贴板";
 "Export group…" = "导出该分组…";
 "Show sidebar" = "显示侧边栏";
+"Rules are edited in the file below. Priority: manual drag, then fulltext, then regex." = "规则在下面的文件里编辑。优先级：手动拖拽 > 全文本 > 正则。";
+"No rules loaded. Edit the file, then Reload from file." = "尚未载入规则。编辑文件后点“从文件重新载入”。";
+"Copy rule for window" = "复制此窗口的规则";
