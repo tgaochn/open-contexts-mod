@@ -1431,6 +1431,9 @@ private final class SidebarItemView: NSView, NSDraggingSource {
         case group(id: String)
         case window(id: String, groupID: String)
     }
+    /// Tinted strip behind group headers so they stand out from (indented) window rows.
+    static let groupHeaderBackground = appAccentColor.withAlphaComponent(0.15)
+    static let windowRowIndent: CGFloat = 14
 
     fileprivate let style: Style
     fileprivate let iconKey: String?
@@ -1466,6 +1469,7 @@ private final class SidebarItemView: NSView, NSDraggingSource {
         wantsLayer = true
         layer?.cornerRadius = 7
         layer?.masksToBounds = true
+        if case .group = style { layer?.backgroundColor = Self.groupHeaderBackground.cgColor }
         setAccessibilityRole(onClick == nil ? .group : .button)
         setAccessibilityLabel(title)
         toolTip = title
@@ -1521,7 +1525,8 @@ private final class SidebarItemView: NSView, NSDraggingSource {
                 height,
             ]
             if showsTitle {
-                let imageLeading = imageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4)
+                let indent: CGFloat = { if case .window = style { return Self.windowRowIndent }; return 4 }()
+                let imageLeading = imageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: indent)
                 imageLeading.priority = .defaultHigh
                 constraints += [
                     imageLeading,
@@ -1604,8 +1609,8 @@ private final class SidebarItemView: NSView, NSDraggingSource {
     fileprivate var smokeHoverAppearanceIsValid: Bool {
         switch style {
         case .group:
-            setHovered(true)
-            return (layer?.backgroundColor == nil || layer?.backgroundColor == NSColor.clear.cgColor)
+            setHovered(true)  // no-op for group headers; they keep their tinted background
+            return layer?.backgroundColor == Self.groupHeaderBackground.cgColor
                 && titleLabel.textColor == .labelColor
         case .window:
             setHovered(true)
