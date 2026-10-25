@@ -6,6 +6,7 @@ MOD 版本的改动:
 4. 添加快捷键激活侧边栏
 5. 修复 group rename 的时候不能使用快捷键复制粘贴的 issue
 6. 软件改名为 openContexts_mod 作为独立软件和原软件隔离
+7. 修改配色方案, 突出 group 和普通窗口的区别; 高亮显示当前激活的窗口
 
 [English](README.md) | **简体中文**
 
