@@ -28,6 +28,8 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
     private let onDeleteGroup: (String) -> Void
     private let onCreateRule: (String) -> Void
     private let onExportGroup: (String, Bool) -> Void
+    private let aliasFor: (String) -> String?
+    private let onSetAlias: (String, String?) -> Void
     private let displayScreen: NSScreen
     private var alwaysVisible = false
     private var fullscreen = false
@@ -94,7 +96,9 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
          onRenameGroup: @escaping (String, String) -> Void,
          onDeleteGroup: @escaping (String) -> Void,
          onCreateRule: @escaping (String) -> Void,
-         onExportGroup: @escaping (String, Bool) -> Void) {
+         onExportGroup: @escaping (String, Bool) -> Void,
+         aliasFor: @escaping (String) -> String?,
+         onSetAlias: @escaping (String, String?) -> Void) {
         self.displayScreen = screen
         self.onActivate = onActivate
         self.canCloseWindow = canCloseWindow
@@ -108,6 +112,8 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         self.onDeleteGroup = onDeleteGroup
         self.onCreateRule = onCreateRule
         self.onExportGroup = onExportGroup
+        self.aliasFor = aliasFor
+        self.onSetAlias = onSetAlias
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
 
@@ -376,6 +382,17 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         createRule.representedObject = target.id
         createRule.isEnabled = renderedGroups.contains { $0.id != GroupStore.ungroupedID }
         menu.addItem(createRule)
+        let setAlias = NSMenuItem(title: L10n.text("Set alias…", language: language),
+                                  action: #selector(setAliasMenuWindow(_:)), keyEquivalent: "")
+        setAlias.target = self
+        setAlias.representedObject = target.id
+        menu.addItem(setAlias)
+        let clearAlias = NSMenuItem(title: L10n.text("Clear alias", language: language),
+                                    action: #selector(clearAliasMenuWindow(_:)), keyEquivalent: "")
+        clearAlias.target = self
+        clearAlias.representedObject = target.id
+        clearAlias.isEnabled = aliasFor(target.id) != nil
+        menu.addItem(clearAlias)
         menu.addItem(.separator())
         let windows = renderedGroups.flatMap { renderedWindows[$0.id, default: []] }
             .filter { $0.processID == processID }
@@ -419,6 +436,20 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         guard let id = sender.representedObject as? String,
               renderedWindows.values.joined().contains(where: { $0.id == id }) else { return }
         onCreateRule(id)
+    }
+
+    @objc private func setAliasMenuWindow(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              renderedWindows.values.joined().contains(where: { $0.id == id }) else { return }
+        requestName(title: L10n.text("Set alias…", language: language), value: aliasFor(id) ?? "") {
+            [weak self] in self?.onSetAlias(id, $0)
+        }
+    }
+
+    @objc private func clearAliasMenuWindow(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              renderedWindows.values.joined().contains(where: { $0.id == id }) else { return }
+        onSetAlias(id, nil)
     }
 
     @objc private func exportGroupToFile(_ sender: NSMenuItem) {
@@ -980,7 +1011,14 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
                 && menu.items[2].title == L10n.text("Copy rule for window", language: language)
                 && menu.items[2].action == #selector(copyRuleMenuWindow(_:))
                 && menu.items[2].representedObject as? String == menu.title
-                && Array(menu.items.dropFirst(4).prefix(windowIDs.count))
+                && menu.items[3].title == L10n.text("Set alias…", language: language)
+                && menu.items[3].action == #selector(setAliasMenuWindow(_:))
+                && menu.items[3].representedObject as? String == menu.title
+                && menu.items[4].title == L10n.text("Clear alias", language: language)
+                && menu.items[4].action == #selector(clearAliasMenuWindow(_:))
+                && menu.items[4].representedObject as? String == menu.title
+                && menu.items[4].isEnabled == (aliasFor(menu.title) != nil)
+                && Array(menu.items.dropFirst(6).prefix(windowIDs.count))
                     .compactMap { $0.representedObject as? String } == windowIDs
                 && menu.items.suffix(2).map(\.title) == [L10n.text("Hide App", language: language),
                                                         L10n.text("Quit App", language: language)]
@@ -2043,7 +2081,9 @@ enum PanelSmokeCheck {
             onRenameGroup: { _, _ in },
             onDeleteGroup: { _ in },
             onCreateRule: { _ in },
-            onExportGroup: { _, _ in }
+            onExportGroup: { _, _ in },
+            aliasFor: { _ in nil },
+            onSetAlias: { _, _ in }
         )
         sidebar.smokeStopHoverPolling()
         let windows = (0..<200).map {

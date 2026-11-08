@@ -108,6 +108,9 @@ public final class GroupStore: ObservableObject {
         // Stable system window id (CGWindowID). Primary key for re-binding across sleep/wake;
         // nil for records written before this was persisted (migrated by cleanupLegacyDuplicateRecords).
         var cgWindowID: UInt32? = nil
+        // User-set display alias, shown as "[alias] title". Rides on this record's identity, so it
+        // survives sleep/wake (CGWindowID-first rebind) rather than being tied to a raw win_id.
+        var alias: String? = nil
         var pinnedPosition: Int? = nil
 
         init(_ window: WindowInfo) {
@@ -246,7 +249,39 @@ public final class GroupStore: ObservableObject {
             return (liveID, position)
         }
         let byID = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0) })
-        return Self.arrangedWindowIDs(visible.map(\.id), pinned: pinned).compactMap { byID[$0] }
+        return Self.arrangedWindowIDs(visible.map(\.id), pinned: pinned).compactMap { byID[$0] }.map(aliased)
+    }
+
+    /// Returns a display copy of each window with its saved alias stamped on (display-only; does not
+    /// touch identity/keys). Used by the sidebar (via windows(in:)) and the ⌘Tab switcher.
+    public func aliased(_ windows: [WindowInfo]) -> [WindowInfo] { windows.map(aliased) }
+
+    private func aliased(_ window: WindowInfo) -> WindowInfo {
+        guard let savedID = savedIDByWindowID[window.id], let (groupID, index) = location(of: savedID),
+              let alias = windowsByGroup[groupID]?[index].alias, !alias.isEmpty else { return window }
+        var copy = window
+        copy.alias = alias
+        return copy
+    }
+
+    /// The alias on a live window's saved record, or nil. For the context-menu state.
+    public func alias(forWindowID windowID: String) -> String? {
+        guard let savedID = savedIDByWindowID[windowID], let (groupID, index) = location(of: savedID) else {
+            return nil
+        }
+        return windowsByGroup[groupID]?[index].alias
+    }
+
+    /// Sets (or clears, when nil/blank) a window's display alias on its saved record.
+    public func setAlias(windowID: String, alias: String?) {
+        guard let savedID = savedIDByWindowID[windowID], let (groupID, index) = location(of: savedID) else {
+            return
+        }
+        let trimmed = alias?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newValue = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        guard windowsByGroup[groupID]?[index].alias != newValue else { return }
+        windowsByGroup[groupID]?[index].alias = newValue
+        changed()
     }
 
     /// The group a live window currently belongs to. Manual placement (a saved record in a real

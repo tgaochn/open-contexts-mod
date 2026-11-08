@@ -149,7 +149,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 onRenameGroup: { [weak self] id, name in self?.groupStore.renameGroup(id: id, name: name) },
                 onDeleteGroup: { [weak self] in self?.groupStore.deleteGroup(id: $0) },
                 onCreateRule: { [weak self] id in self?.copyRule(from: id) },
-                onExportGroup: { [weak self] groupID, toClipboard in self?.exportGroup(groupID, toClipboard: toClipboard) }
+                onExportGroup: { [weak self] groupID, toClipboard in self?.exportGroup(groupID, toClipboard: toClipboard) },
+                aliasFor: { [weak self] in self?.groupStore.alias(forWindowID: $0) },
+                onSetAlias: { [weak self] id, alias in self?.groupStore.setAlias(windowID: id, alias: alias) }
             )
             switchers[id] = SwitcherPanel(
                 screen: screen,
@@ -203,9 +205,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func availableWindows(currentAppOnly: Bool, pid: pid_t? = nil) -> [WindowInfo] {
-        guard currentAppOnly else { return windowService.windows }
-        let processID = pid ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
-        return windowService.windows.filter { $0.processID == processID }
+        let scoped: [WindowInfo]
+        if currentAppOnly {
+            let processID = pid ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
+            scoped = windowService.windows.filter { $0.processID == processID }
+        } else {
+            scoped = windowService.windows
+        }
+        // Stamp aliases so the ⌘Tab switcher shows "[alias] title" and can be searched by alias.
+        return groupStore.aliased(scoped)
     }
 
     private func handle(_ action: SwitcherAction) {

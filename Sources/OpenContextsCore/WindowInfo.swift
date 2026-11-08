@@ -9,14 +9,20 @@ public struct WindowInfo: Identifiable, Equatable {
     public let processID: Int32
     /// System window number (CGWindowID): stable across app restart & sleep; 0 if unavailable.
     public let cgWindowID: UInt32
+    /// User-set alias, display-only. Stamped from the window's saved record by GroupStore; never set
+    /// by WindowService. Does NOT affect rule matching or identity keys (those use the raw `title`).
+    public var alias: String?
 
     public var displayTitle: String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? appName : trimmed
+        let base = trimmed.isEmpty ? appName : trimmed
+        if let alias, !alias.isEmpty { return "[\(alias)] \(base)" }
+        return base
     }
 
     public init(id: String, appID: String, appName: String, title: String,
-                documentURL: String? = nil, processID: Int32, cgWindowID: UInt32 = 0) {
+                documentURL: String? = nil, processID: Int32, cgWindowID: UInt32 = 0,
+                alias: String? = nil) {
         self.id = id
         self.appID = appID
         self.appName = appName
@@ -24,5 +30,6 @@ public struct WindowInfo: Identifiable, Equatable {
         self.documentURL = documentURL
         self.processID = processID
         self.cgWindowID = cgWindowID
+        self.alias = alias
     }
 }
