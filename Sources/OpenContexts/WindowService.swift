@@ -391,9 +391,12 @@ final class WindowService: ObservableObject {
             switch appWindowsRead {
             case let .value(windows):
                 appWindows = windows
-            case .failure(.invalidUIElement):
-                appWindows = []
             case .noValue, .failure:
+                // The app is still running (it is in `applications`), so a failed window-list read —
+                // including `.invalidUIElement` right after sleep/wake — is transient. Keep its
+                // previously tracked windows this scan so their identity (and the CGWindowID-based
+                // manual-pin bindings) survive the blip instead of churning to new ids. A genuinely
+                // quit app drops out of `applications` and is simply not iterated next scan.
                 discovered.append(contentsOf: previous.filter { $0.info.processID == application.processID })
                 usedIDs.formUnion(previous.lazy.filter { $0.info.processID == application.processID }.map(\.id))
                 continue

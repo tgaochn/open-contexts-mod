@@ -105,6 +105,9 @@ public final class GroupStore: ObservableObject {
         var appID: String
         var title: String
         var documentURL: String?
+        // Stable system window id (CGWindowID). Primary key for re-binding across sleep/wake;
+        // nil for records written before this was persisted (migrated by cleanupLegacyDuplicateRecords).
+        var cgWindowID: UInt32? = nil
         var pinnedPosition: Int? = nil
 
         init(_ window: WindowInfo) {
@@ -112,6 +115,7 @@ public final class GroupStore: ObservableObject {
             appID = window.appID
             title = window.title
             documentURL = window.documentURL
+            cgWindowID = window.cgWindowID == 0 ? nil : window.cgWindowID
         }
     }
 
@@ -133,12 +137,25 @@ public final class GroupStore: ObservableObject {
     private var savedIDByWindowID: [String: String] = [:]
     private var persistenceBlocked = false
 
+    // Auto-reload of the external rules.jsonc file (opt-in via startWatchingRulesFile()).
+    private var rulesWatchSource: DispatchSourceFileSystemObject?
+    private var rulesWatchFD: Int32 = -1
+    private let rulesWatchQueue = DispatchQueue(label: "local.opencontexts.ruleswatch")
+    private var rulesReloadWorkItem: DispatchWorkItem?
+    private var isWatchingRules = false
+
     public init(fileURL: URL? = nil) {
         self.fileURL = fileURL ?? Self.defaultFileURL
         self.groups = [WindowGroup(id: Self.ungroupedID, name: "未分组")]
         self.windowsByGroup = [Self.ungroupedID: []]
         load()
         migrateLegacyRulesFile()
+    }
+
+    deinit {
+        rulesReloadWorkItem?.cancel()
+        rulesWatchSource?.cancel()
+        if rulesWatchFD >= 0 { close(rulesWatchFD) }
     }
 
     /// Renames a pre-existing rules.json to rules.jsonc (content was already JSONC-compatible).
@@ -326,6 +343,85 @@ public final class GroupStore: ObservableObject {
     }
 
     public func exportRulesJSONC() -> String { exportNested(rules) }
+
+    /// Starts watching rules.jsonc so external edits auto-reload (debounced). Idempotent.
+    /// Opt-in: the app calls this; tests/previews that never call it are unaffected.
+    public func startWatchingRulesFile() {
+        guard !isWatchingRules else { return }
+        isWatchingRules = true
+        armRulesWatcher()
+    }
+
+    /// Stops watching rules.jsonc and releases the file descriptor.
+    public func stopWatchingRulesFile() {
+        isWatchingRules = false
+        rulesReloadWorkItem?.cancel()
+        rulesReloadWorkItem = nil
+        rulesWatchSource?.cancel()   // cancel handler closes the fd
+        rulesWatchSource = nil
+    }
+
+    /// (Re)opens the file descriptor and arms a DispatchSource. Re-armed after atomic saves
+    /// (editors write a temp file then rename over the original, which invalidates the old fd).
+    private func armRulesWatcher() {
+        guard isWatchingRules else { return }
+        rulesWatchSource?.cancel()
+        rulesWatchSource = nil
+
+        let fd = open(rulesFileURL.path, O_EVTONLY)
+        guard fd >= 0 else {
+            // File not present yet (e.g. never exported): retry so first creation is picked up.
+            rulesWatchQueue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self, self.isWatchingRules else { return }
+                DispatchQueue.main.async { self.armRulesWatcher() }
+            }
+            return
+        }
+        rulesWatchFD = fd
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .extend, .attrib, .delete, .rename, .revoke],
+            queue: rulesWatchQueue
+        )
+        source.setEventHandler { [weak self, weak source] in
+            guard let source else { return }
+            let flags = source.data
+            // Hop to main: all watcher state (source, fd, work item) is touched on main only.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isWatchingRules else { return }
+                // Atomic save or deletion invalidates the fd — re-open the new inode first.
+                if flags.contains(.delete) || flags.contains(.rename) || flags.contains(.revoke) {
+                    self.armRulesWatcher()
+                }
+                self.scheduleRulesReload()
+            }
+        }
+        source.setCancelHandler { [weak self] in
+            if let fd = self?.rulesWatchFD, fd >= 0 { close(fd) }
+            self?.rulesWatchFD = -1
+        }
+        rulesWatchSource = source
+        source.resume()
+    }
+
+    /// Debounces write bursts (coalesces the multiple events an editor save emits), then reloads.
+    /// Called and scheduled on the main thread; importRules mutates @Published state.
+    private func scheduleRulesReload() {
+        rulesReloadWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.reloadRulesFromFile() }
+        rulesReloadWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    private func reloadRulesFromFile() {
+        guard let text = try? String(contentsOf: rulesFileURL, encoding: .utf8) else { return }
+        let errors = importRules(fromJSONC: text)
+        if !errors.isEmpty {
+            let msg = "[OpenContexts] rules.jsonc auto-reload errors:\n  "
+                + errors.joined(separator: "\n  ") + "\n"
+            FileHandle.standardError.write(Data(msg.utf8))
+        }
+    }
 
     /// Exports the CURRENT per-window grouping (manual drags + rule-settled windows that have been
     /// persisted) as a rules template: one `title`/`fulltext` entry per grouped window. Lets you
@@ -764,10 +860,12 @@ public final class GroupStore: ObservableObject {
             Self.matchKeys(appID: $0.appID, title: $0.title, documentURL: $0.documentURL)
         }, by: { $0 }).mapValues(\.count)
         var savedByKey: [String: [String]] = [:]
+        var savedByCGID: [UInt32: [String]] = [:]
         var savedByID: [String: SavedWindow] = [:]
         for group in groups {
             for saved in windowsByGroup[group.id, default: []] {
                 savedByID[saved.id] = saved
+                if let cg = saved.cgWindowID, cg != 0 { savedByCGID[cg, default: []].append(saved.id) }
                 for key in Self.matchKeys(appID: saved.appID, title: saved.title, documentURL: saved.documentURL) {
                     savedByKey[key, default: []].append(saved.id)
                 }
@@ -788,6 +886,15 @@ public final class GroupStore: ObservableObject {
             usedSavedIDs.insert(saved.id)
         }
         for window in windows.reversed() where savedIDByWindowID[window.id] == nil {
+            // Prefer the stable CGWindowID: it uniquely identifies the window, survives sleep/wake,
+            // and resolves records that content matching would flag as cross-group ambiguous.
+            if window.cgWindowID != 0, let byCGID = savedByCGID[window.cgWindowID],
+               let savedID = byCGID.first(where: { !usedSavedIDs.contains($0) }) {
+                savedIDByWindowID = savedIDByWindowID.filter { $0.value != savedID }
+                savedIDByWindowID[window.id] = savedID
+                usedSavedIDs.insert(savedID)
+                continue
+            }
             let groupKey = Self.titleKey(appID: window.appID, title: window.title)
             let key = liveKeyCounts[groupKey, default: 0] > 1 && savedByKey[groupKey]?.count == 1
                 ? groupKey : Self.documentKey(appID: window.appID, documentURL: window.documentURL) ?? groupKey
@@ -819,6 +926,7 @@ public final class GroupStore: ObservableObject {
         windowsByGroup[groupID]?[index].appID = window.appID
         windowsByGroup[groupID]?[index].title = window.title
         windowsByGroup[groupID]?[index].documentURL = window.documentURL
+        windowsByGroup[groupID]?[index].cgWindowID = window.cgWindowID == 0 ? nil : window.cgWindowID
     }
 
     private func changed(preferredSavedIDs: [String] = [],
@@ -878,12 +986,70 @@ public final class GroupStore: ObservableObject {
         windowsByGroup[groupID]?[index].pinnedPosition = requested
     }
 
+    /// Collapses records that share the same stable CGWindowID (i.e. the same physical window) into
+    /// a single record, across all groups — a window must live in exactly one group. The winner is
+    /// the live-bound record, else the preferred one, else a pinned one, else the first; it keeps its
+    /// group and pin. This is the safe, ongoing dedup (CGWindowID is unambiguous).
+    private func collapseDuplicateCGWindowRecords(priority: [String: Int], liveSavedIDs: Set<String>) {
+        var byCGID: [UInt32: [(groupID: String, savedID: String)]] = [:]
+        for group in groups {
+            for saved in windowsByGroup[group.id, default: []] {
+                guard let cg = saved.cgWindowID, cg != 0 else { continue }
+                byCGID[cg, default: []].append((group.id, saved.id))
+            }
+        }
+        let pinnedIDs = Set(windowsByGroup.values.flatMap { $0 }.filter { $0.pinnedPosition != nil }.map(\.id))
+        var removeByGroup: [String: Set<String>] = [:]
+        for (_, recs) in byCGID where recs.count > 1 {
+            func rank(_ savedID: String) -> (Int, Int, Int) {
+                (liveSavedIDs.contains(savedID) ? 1 : 0,
+                 priority[savedID].map { 1_000_000 - $0 } ?? 0,
+                 pinnedIDs.contains(savedID) ? 1 : 0)
+            }
+            let keep = recs.max { rank($0.savedID) < rank($1.savedID) }!.savedID
+            for r in recs where r.savedID != keep { removeByGroup[r.groupID, default: []].insert(r.savedID) }
+        }
+        for (groupID, ids) in removeByGroup {
+            windowsByGroup[groupID]?.removeAll { ids.contains($0.id) }
+        }
+    }
+
+    /// One-time repair (run at load) for records created before CGWindowID was persisted: the old
+    /// content-based rebind could leave the same window duplicated within and across groups. Collapses
+    /// exact (appID, title, documentURL) duplicates that have NO cgWindowID into a single record, kept
+    /// in the group holding the most copies (the user's most recent intent); ties break by group order.
+    private func cleanupLegacyDuplicateRecords() {
+        struct Key: Hashable { let appID: String; let title: String; let url: String? }
+        let order = Dictionary(uniqueKeysWithValues: groups.enumerated().map { ($0.element.id, $0.offset) })
+        var occ: [Key: [(groupID: String, savedID: String, pinned: Bool)]] = [:]
+        for group in groups {
+            for saved in windowsByGroup[group.id, default: []] where saved.cgWindowID == nil {
+                let k = Key(appID: saved.appID, title: saved.title, url: saved.documentURL)
+                occ[k, default: []].append((group.id, saved.id, saved.pinnedPosition != nil))
+            }
+        }
+        var removeByGroup: [String: Set<String>] = [:]
+        for (_, recs) in occ where recs.count > 1 {
+            let countByGroup = Dictionary(grouping: recs, by: \.groupID).mapValues(\.count)
+            let winnerGroup = countByGroup.max {
+                $0.value != $1.value ? $0.value < $1.value : (order[$0.key] ?? .max) > (order[$1.key] ?? .max)
+            }!.key
+            let inWinner = recs.filter { $0.groupID == winnerGroup }
+            let keep = (inWinner.first { $0.pinned } ?? inWinner.first)!.savedID
+            for r in recs where r.savedID != keep { removeByGroup[r.groupID, default: []].insert(r.savedID) }
+        }
+        for (groupID, ids) in removeByGroup {
+            windowsByGroup[groupID]?.removeAll { ids.contains($0.id) }
+        }
+    }
+
     private func normalizeDuplicateRecords(preferredSavedIDs: [String] = [],
                                            pinnedSlots: [String: [(WindowKey, Int)]] = [:]) {
         let priority = Dictionary(uniqueKeysWithValues: preferredSavedIDs.enumerated().map { ($0.element, $0.offset) })
         let liveSavedIDs = Set(savedIDByWindowID.compactMap { liveID, savedID in
             activeWindows[liveID] == nil ? nil : savedID
         })
+        collapseDuplicateCGWindowRecords(priority: priority, liveSavedIDs: liveSavedIDs)
         for group in groups {
             let oldWindows = windowsByGroup[group.id, default: []]
             let slots = pinnedSlots[group.id] ?? pinnedPositions(in: group.id)
@@ -950,6 +1116,7 @@ public final class GroupStore: ObservableObject {
             windowsByGroup = state.windowsByGroup
             rules = (state.rules ?? []).filter { rule in ids.contains(rule.groupID) }
             for id in ids where windowsByGroup[id] == nil { windowsByGroup[id] = [] }
+            cleanupLegacyDuplicateRecords()
         } catch {
             persistenceBlocked = true
             persistenceError = "无法读取分组数据：\(error.localizedDescription)"

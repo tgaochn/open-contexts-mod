@@ -38,12 +38,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         observeState()
         rebuildPanels()
         windowService.start()
+        groupStore.startWatchingRulesFile()
         if !windowService.hasAccessibility { showSettings() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         shortcuts.stop()
         windowService.stop()
+        groupStore.stopWatchingRulesFile()
         sidebars.values.forEach { $0.close() }
         switchers.values.forEach { $0.close() }
     }
