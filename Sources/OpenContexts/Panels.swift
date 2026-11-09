@@ -68,6 +68,7 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
     private var stackCrossAxisConstraint: NSLayoutConstraint?
     private var bottomItemWidthConstraints: [NSLayoutConstraint] = []
     private var previewDrop: SidebarDrop?
+    private var rowTooltip: NSPanel?
 
     private struct PendingSidebarUpdate {
         let groups: [WindowGroup]
@@ -258,6 +259,7 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         iconCache = iconCache.filter { activeIconKeys.contains($0.key) }
         NSLayoutConstraint.deactivate(bottomItemWidthConstraints)
         bottomItemWidthConstraints = []
+        hideRowTooltip()   // rows are about to be torn down / rebuilt
         stack.arrangedSubviews.forEach {
             stack.removeArrangedSubview($0)
             $0.removeFromSuperview()
@@ -630,8 +632,70 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
     func clearReveal() {
         guard revealed else { return }
         revealed = false
+        hideRowTooltip()
         layoutPanel()
     }
+
+    // ─── Hover tooltip (full, untruncated title) ────────────────────────────────
+    // A standalone ignores-mouse panel; native NSView tooltips don't fire on the
+    // non-activating sidebar, so we drive our own off the row hover events.
+    private func makeTooltipPanel() -> NSPanel {
+        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: true)
+        panel.level = .popUpMenu
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        let bg = NSVisualEffectView()
+        bg.material = .toolTip
+        bg.blendingMode = .behindWindow
+        bg.state = .active
+        bg.wantsLayer = true
+        bg.layer?.cornerRadius = 6
+        bg.layer?.masksToBounds = true
+        bg.autoresizingMask = [.width, .height]
+        let label = NSTextField(wrappingLabelWithString: "")
+        label.font = .systemFont(ofSize: 12)
+        label.textColor = .labelColor
+        label.drawsBackground = false
+        label.isSelectable = false
+        bg.addSubview(label)
+        panel.contentView = bg
+        return panel
+    }
+
+    func showRowTooltip(_ text: String, over row: NSView) {
+        guard !text.isEmpty, let rowWindow = row.window else { hideRowTooltip(); return }
+        let panel = rowTooltip ?? makeTooltipPanel()
+        rowTooltip = panel
+        guard let label = (panel.contentView?.subviews.first as? NSTextField) else { return }
+
+        let inset: CGFloat = 8
+        let maxTextWidth: CGFloat = 460
+        label.stringValue = text
+        label.preferredMaxLayoutWidth = maxTextWidth
+        var textSize = label.sizeThatFits(NSSize(width: maxTextWidth, height: 4000))
+        textSize.width = min(textSize.width, maxTextWidth)
+        label.frame = NSRect(x: inset, y: inset, width: textSize.width, height: textSize.height)
+        let size = NSSize(width: textSize.width + 2 * inset, height: textSize.height + 2 * inset)
+        panel.setContentSize(size)
+
+        // Place on the far side of the sidebar so it never covers the hovered row.
+        let rowScreen = rowWindow.convertToScreen(row.convert(row.bounds, to: nil))
+        let gap: CGFloat = 8
+        var x = renderedPosition == .right ? frame.minX - gap - size.width : frame.maxX + gap
+        var y = rowScreen.midY - size.height / 2
+        if let vis = (rowWindow.screen ?? NSScreen.main)?.visibleFrame {
+            x = min(max(x, vis.minX + 4), vis.maxX - size.width - 4)
+            y = min(max(y, vis.minY + 4), vis.maxY - size.height - 4)
+        }
+        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        panel.orderFront(nil)
+    }
+
+    func hideRowTooltip() { rowTooltip?.orderOut(nil) }
 
     private func layoutPanel() {
         guard enabled, hasVisibleContent else {
@@ -1591,6 +1655,7 @@ private final class SidebarItemView: NSView, NSDraggingSource {
     private let aliasBadgeLength: Int
     private let aliasTextColor: NSColor?
     private let aliasBgColor: NSColor?
+    private let fullTitle: String   // untruncated title, shown as a hover tooltip
     private var badgeWidthConstraint: NSLayoutConstraint?
     private var badgeHeightConstraint: NSLayoutConstraint?
     private var badgeTrailingConstraint: NSLayoutConstraint?
@@ -1614,6 +1679,7 @@ private final class SidebarItemView: NSView, NSDraggingSource {
         self.aliasBadgeLength = aliasBadgeLength
         self.aliasTextColor = aliasTextColor
         self.aliasBgColor = aliasBgColor
+        self.fullTitle = title
         self.onClick = onClick
         self.onDraggingChanged = onDraggingChanged
         titleLabel = NSTextField(labelWithString: title)
@@ -1746,8 +1812,16 @@ private final class SidebarItemView: NSView, NSDraggingSource {
         setHovered(pointer.map { visibleRect.contains($0) } ?? false)
     }
 
-    override func mouseEntered(with event: NSEvent) { setHovered(true) }
-    override func mouseExited(with event: NSEvent) { setHovered(false) }
+    override func mouseEntered(with event: NSEvent) {
+        setHovered(true)
+        // Native tooltips don't fire on the non-activating sidebar panel, so show our own with the
+        // full (untruncated) title. Window rows only.
+        if case .window = style { (window as? SidebarPanel)?.showRowTooltip(fullTitle, over: self) }
+    }
+    override func mouseExited(with event: NSEvent) {
+        setHovered(false)
+        (window as? SidebarPanel)?.hideRowTooltip()
+    }
 
     fileprivate var smokeHeightIsValid: Bool {
         let expected: CGFloat = switch style {
