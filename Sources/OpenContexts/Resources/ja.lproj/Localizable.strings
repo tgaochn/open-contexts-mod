@@ -89,4 +89,7 @@
 "Copy rule for window" = "このウインドウのルールをコピー";
 "Set alias…" = "エイリアスを設定…";
 "Clear alias" = "エイリアスを消去";
+"Alias text color" = "エイリアスの文字色";
+"Alias background" = "エイリアスの背景色";
+"Default" = "デフォルト";
 "Window ID" = "ウインドウID";

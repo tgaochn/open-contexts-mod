@@ -30,6 +30,8 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
     private let onExportGroup: (String, Bool) -> Void
     private let aliasFor: (String) -> String?
     private let onSetAlias: (String, String?) -> Void
+    private let aliasColorsFor: (String) -> (text: String?, bg: String?)
+    private let onSetAliasColors: (String, String?, String?) -> Void
     private let displayScreen: NSScreen
     private var alwaysVisible = false
     private var fullscreen = false
@@ -98,7 +100,9 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
          onCreateRule: @escaping (String) -> Void,
          onExportGroup: @escaping (String, Bool) -> Void,
          aliasFor: @escaping (String) -> String?,
-         onSetAlias: @escaping (String, String?) -> Void) {
+         onSetAlias: @escaping (String, String?) -> Void,
+         aliasColorsFor: @escaping (String) -> (text: String?, bg: String?),
+         onSetAliasColors: @escaping (String, String?, String?) -> Void) {
         self.displayScreen = screen
         self.onActivate = onActivate
         self.canCloseWindow = canCloseWindow
@@ -114,6 +118,8 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         self.onExportGroup = onExportGroup
         self.aliasFor = aliasFor
         self.onSetAlias = onSetAlias
+        self.aliasColorsFor = aliasColorsFor
+        self.onSetAliasColors = onSetAliasColors
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
 
@@ -304,12 +310,17 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
                 let icon = iconCache[iconKey]
                     ?? (iconRetrySchedules[iconKey] == nil ? resolvedApplicationIcon(for: window) : nil)
                 if let icon { iconCache[iconKey] = icon }
+                let aliasBadgeLength = (window.alias?.isEmpty == false)
+                    ? ("[\(window.alias!)]" as NSString).length : 0
                 let row = SidebarItemView(
                     title: window.displayTitle,
                     icon: icon ?? fallbackApplicationIcon(for: window),
                     iconKey: iconKey,
                     badgeKey: window.appID,
                     badge: renderedBadges[window.appID],
+                    aliasBadgeLength: aliasBadgeLength,
+                    aliasTextColor: Self.color(fromHex: window.aliasTextColor),
+                    aliasBgColor: Self.color(fromHex: window.aliasBgColor),
                     showsTitle: itemDisplayMode == .iconAndTitle,
                     style: .window(id: window.id, groupID: group.id),
                     onClick: { [weak self] in self?.onActivate(window.id); self?.clearReveal() },
@@ -393,6 +404,14 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         clearAlias.representedObject = target.id
         clearAlias.isEnabled = aliasFor(target.id) != nil
         menu.addItem(clearAlias)
+        if aliasFor(target.id) != nil {
+            // Only offer "[alias]" badge colors once an alias exists.
+            let (curText, curBg) = aliasColorsFor(target.id)
+            menu.addItem(aliasColorSubmenuItem(title: L10n.text("Alias text color", language: language),
+                                               windowID: target.id, kind: .text, current: curText))
+            menu.addItem(aliasColorSubmenuItem(title: L10n.text("Alias background", language: language),
+                                               windowID: target.id, kind: .background, current: curBg))
+        }
         menu.addItem(.separator())
         let windows = renderedGroups.flatMap { renderedWindows[$0.id, default: []] }
             .filter { $0.processID == processID }
@@ -450,6 +469,79 @@ final class SidebarPanel: NSPanel, NSMenuDelegate {
         guard let id = sender.representedObject as? String,
               renderedWindows.values.joined().contains(where: { $0.id == id }) else { return }
         onSetAlias(id, nil)
+    }
+
+    private enum AliasColorKind: String { case text, background }
+
+    // Preset palette for the "[alias]" badge — a right-click submenu, which works on the
+    // non-activating sidebar panel (a native NSColorPanel would steal/break focus here).
+    private static let aliasPalette: [(name: String, hex: String)] = [
+        ("Red", "#E5484D"), ("Orange", "#F76808"), ("Yellow", "#FFC53D"),
+        ("Green", "#30A46C"), ("Blue", "#0091FF"), ("Purple", "#8E4EC6"),
+        ("Pink", "#E93D82"), ("Gray", "#8B8D98"), ("Black", "#1A1A1A"), ("White", "#FFFFFF"),
+    ]
+
+    private func aliasColorSubmenuItem(title: String, windowID: String,
+                                       kind: AliasColorKind, current: String?) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        sub.autoenablesItems = false
+        let def = NSMenuItem(title: L10n.text("Default", language: language),
+                             action: #selector(setAliasColorMenu(_:)), keyEquivalent: "")
+        def.target = self
+        def.representedObject = "\(windowID)\u{0}\(kind.rawValue)\u{0}"   // empty hex ⇒ clear
+        def.state = current == nil ? .on : .off
+        sub.addItem(def)
+        sub.addItem(.separator())
+        for color in Self.aliasPalette {
+            let mi = NSMenuItem(title: color.name, action: #selector(setAliasColorMenu(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = "\(windowID)\u{0}\(kind.rawValue)\u{0}\(color.hex)"
+            mi.image = Self.colorSwatch(Self.color(fromHex: color.hex) ?? .gray)
+            mi.state = current?.caseInsensitiveCompare(color.hex) == .orderedSame ? .on : .off
+            sub.addItem(mi)
+        }
+        item.submenu = sub
+        return item
+    }
+
+    @objc private func setAliasColorMenu(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        let parts = raw.components(separatedBy: "\u{0}")
+        guard parts.count == 3,
+              renderedWindows.values.joined().contains(where: { $0.id == parts[0] }) else { return }
+        let id = parts[0]
+        let hex = parts[2].isEmpty ? nil : parts[2]
+        let (curText, curBg) = aliasColorsFor(id)
+        if parts[1] == AliasColorKind.text.rawValue {
+            onSetAliasColors(id, hex, curBg)
+        } else {
+            onSetAliasColors(id, curText, hex)
+        }
+    }
+
+    /// Parses "#RRGGBB" into an NSColor; nil for nil/malformed input.
+    static func color(fromHex hex: String?) -> NSColor? {
+        guard var h = hex else { return nil }
+        if h.hasPrefix("#") { h.removeFirst() }
+        guard h.count == 6, let v = Int(h, radix: 16) else { return nil }
+        return NSColor(srgbRed: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255,
+                       blue: CGFloat(v & 0xFF) / 255, alpha: 1)
+    }
+
+    /// A small rounded color square for a palette menu item.
+    static func colorSwatch(_ color: NSColor, size: CGFloat = 12) -> NSImage {
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+        color.setFill()
+        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: size, height: size), xRadius: 2, yRadius: 2).fill()
+        NSColor.separatorColor.setStroke()
+        let border = NSBezierPath(roundedRect: NSRect(x: 0.5, y: 0.5, width: size - 1, height: size - 1),
+                                  xRadius: 2, yRadius: 2)
+        border.lineWidth = 1
+        border.stroke()
+        image.unlockFocus()
+        return image
     }
 
     @objc private func exportGroupToFile(_ sender: NSMenuItem) {
@@ -1495,6 +1587,10 @@ private final class SidebarItemView: NSView, NSDraggingSource {
     private weak var iconView: NSImageView?
     private weak var badgeLabel: NSTextField?
     private let showsTitle: Bool
+    // UTF-16 length of the leading "[alias]" badge to colorize (0 = no alias); optional badge colors.
+    private let aliasBadgeLength: Int
+    private let aliasTextColor: NSColor?
+    private let aliasBgColor: NSColor?
     private var badgeWidthConstraint: NSLayoutConstraint?
     private var badgeHeightConstraint: NSLayoutConstraint?
     private var badgeTrailingConstraint: NSLayoutConstraint?
@@ -1507,6 +1603,7 @@ private final class SidebarItemView: NSView, NSDraggingSource {
 
     init(title: String, icon: NSImage? = nil, iconKey: String? = nil,
          badgeKey: String? = nil, badge: String? = nil,
+         aliasBadgeLength: Int = 0, aliasTextColor: NSColor? = nil, aliasBgColor: NSColor? = nil,
          showsTitle: Bool = true,
          style: Style, onClick: (() -> Void)?,
          onDraggingChanged: @escaping (Bool) -> Void) {
@@ -1514,6 +1611,9 @@ private final class SidebarItemView: NSView, NSDraggingSource {
         self.iconKey = iconKey
         self.badgeKey = badgeKey
         self.showsTitle = showsTitle
+        self.aliasBadgeLength = aliasBadgeLength
+        self.aliasTextColor = aliasTextColor
+        self.aliasBgColor = aliasBgColor
         self.onClick = onClick
         self.onDraggingChanged = onDraggingChanged
         titleLabel = NSTextField(labelWithString: title)
@@ -1532,9 +1632,12 @@ private final class SidebarItemView: NSView, NSDraggingSource {
         case .window: .systemFont(ofSize: 13, weight: .regular)
         }
         titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.maximumNumberOfLines = 1            // stay single-line even with an attributed title
+        titleLabel.cell?.truncatesLastVisibleLine = true
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         if showsTitle { addSubview(titleLabel) }
+        applyTitleStyling(base: .labelColor)   // color the "[alias]" badge for the resting state
 
         let leading: CGFloat = 4
         var constraints: [NSLayoutConstraint] = []
@@ -1781,21 +1884,43 @@ private final class SidebarItemView: NSView, NSDraggingSource {
     }
 
     private func updateWindowAppearance() {
+        let base: NSColor
         if isHovered {
             layer?.backgroundColor = appAccentColor.cgColor
             layer?.borderWidth = 0
-            titleLabel.textColor = .white
+            base = .white
         } else if isFocused {
             // Orange (not accent/blue) so it doesn't blend with the blue-tinted group headers.
             layer?.backgroundColor = NSColor.systemOrange.withAlphaComponent(0.14).cgColor
             layer?.borderColor = NSColor.systemOrange.cgColor
             layer?.borderWidth = 2
-            titleLabel.textColor = .labelColor
+            base = .labelColor
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
             layer?.borderWidth = 0
-            titleLabel.textColor = .labelColor
+            base = .labelColor
         }
+        applyTitleStyling(base: base)
+    }
+
+    /// Colors the whole title `base`, then overlays the chosen fg/bg on the leading "[alias]" badge.
+    /// With no alias badge it's just a plain textColor (keeps non-alias rows byte-identical to before).
+    private func applyTitleStyling(base: NSColor) {
+        guard aliasBadgeLength > 0 else { titleLabel.textColor = base; return }
+        let full = titleLabel.stringValue
+        // An attributed string drops the label's lineBreakMode, so re-assert tail truncation
+        // (keeps aliased rows single-line, like plain rows).
+        let para = NSMutableParagraphStyle()
+        para.lineBreakMode = .byTruncatingTail
+        let attr = NSMutableAttributedString(string: full,
+                                             attributes: [.foregroundColor: base, .paragraphStyle: para])
+        let len = min(aliasBadgeLength, (full as NSString).length)
+        if len > 0 {
+            let range = NSRange(location: 0, length: len)
+            if let aliasTextColor { attr.addAttribute(.foregroundColor, value: aliasTextColor, range: range) }
+            if let aliasBgColor { attr.addAttribute(.backgroundColor, value: aliasBgColor, range: range) }
+        }
+        titleLabel.attributedStringValue = attr
     }
 }
 
@@ -2083,7 +2208,9 @@ enum PanelSmokeCheck {
             onCreateRule: { _ in },
             onExportGroup: { _, _ in },
             aliasFor: { _ in nil },
-            onSetAlias: { _, _ in }
+            onSetAlias: { _, _ in },
+            aliasColorsFor: { _ in (nil, nil) },
+            onSetAliasColors: { _, _, _ in }
         )
         sidebar.smokeStopHoverPolling()
         let windows = (0..<200).map {

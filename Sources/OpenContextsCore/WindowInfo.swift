@@ -12,6 +12,9 @@ public struct WindowInfo: Identifiable, Equatable {
     /// User-set alias, display-only. Stamped from the window's saved record by GroupStore; never set
     /// by WindowService. Does NOT affect rule matching or identity keys (those use the raw `title`).
     public var alias: String?
+    /// Optional hex colors ("#RRGGBB") for the "[alias]" badge; nil = default. Display-only.
+    public var aliasTextColor: String?
+    public var aliasBgColor: String?
 
     public var displayTitle: String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -22,7 +25,7 @@ public struct WindowInfo: Identifiable, Equatable {
 
     public init(id: String, appID: String, appName: String, title: String,
                 documentURL: String? = nil, processID: Int32, cgWindowID: UInt32 = 0,
-                alias: String? = nil) {
+                alias: String? = nil, aliasTextColor: String? = nil, aliasBgColor: String? = nil) {
         self.id = id
         self.appID = appID
         self.appName = appName
@@ -31,5 +34,7 @@ public struct WindowInfo: Identifiable, Equatable {
         self.processID = processID
         self.cgWindowID = cgWindowID
         self.alias = alias
+        self.aliasTextColor = aliasTextColor
+        self.aliasBgColor = aliasBgColor
     }
 }

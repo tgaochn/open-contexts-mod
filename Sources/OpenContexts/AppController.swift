@@ -151,7 +151,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 onCreateRule: { [weak self] id in self?.copyRule(from: id) },
                 onExportGroup: { [weak self] groupID, toClipboard in self?.exportGroup(groupID, toClipboard: toClipboard) },
                 aliasFor: { [weak self] in self?.groupStore.alias(forWindowID: $0) },
-                onSetAlias: { [weak self] id, alias in self?.groupStore.setAlias(windowID: id, alias: alias) }
+                onSetAlias: { [weak self] id, alias in self?.groupStore.setAlias(windowID: id, alias: alias) },
+                aliasColorsFor: { [weak self] in self?.groupStore.aliasColors(forWindowID: $0) ?? (nil, nil) },
+                onSetAliasColors: { [weak self] id, t, b in
+                    self?.groupStore.setAliasColors(windowID: id, textColor: t, bgColor: b)
+                }
             )
             switchers[id] = SwitcherPanel(
                 screen: screen,

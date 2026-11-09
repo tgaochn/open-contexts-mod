@@ -89,4 +89,7 @@
 "Copy rule for window" = "复制此窗口的规则";
 "Set alias…" = "设置别名…";
 "Clear alias" = "清除别名";
+"Alias text color" = "别名字色";
+"Alias background" = "别名底色";
+"Default" = "默认";
 "Window ID" = "窗口 ID";

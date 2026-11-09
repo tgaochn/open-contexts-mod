@@ -89,4 +89,7 @@
 "Copy rule for window" = "Copiar regla de la ventana";
 "Set alias…" = "Establecer alias…";
 "Clear alias" = "Borrar alias";
+"Alias text color" = "Color de texto del alias";
+"Alias background" = "Fondo del alias";
+"Default" = "Predeterminado";
 "Window ID" = "ID de ventana";

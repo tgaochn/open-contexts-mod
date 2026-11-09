@@ -111,6 +111,9 @@ public final class GroupStore: ObservableObject {
         // User-set display alias, shown as "[alias] title". Rides on this record's identity, so it
         // survives sleep/wake (CGWindowID-first rebind) rather than being tied to a raw win_id.
         var alias: String? = nil
+        // Optional hex colors ("#RRGGBB") for the "[alias]" badge; nil = default.
+        var aliasTextColor: String? = nil
+        var aliasBgColor: String? = nil
         var pinnedPosition: Int? = nil
 
         init(_ window: WindowInfo) {
@@ -258,9 +261,12 @@ public final class GroupStore: ObservableObject {
 
     private func aliased(_ window: WindowInfo) -> WindowInfo {
         guard let savedID = savedIDByWindowID[window.id], let (groupID, index) = location(of: savedID),
-              let alias = windowsByGroup[groupID]?[index].alias, !alias.isEmpty else { return window }
+              let saved = windowsByGroup[groupID]?[index],
+              let alias = saved.alias, !alias.isEmpty else { return window }
         var copy = window
         copy.alias = alias
+        copy.aliasTextColor = saved.aliasTextColor
+        copy.aliasBgColor = saved.aliasBgColor
         return copy
     }
 
@@ -272,7 +278,15 @@ public final class GroupStore: ObservableObject {
         return windowsByGroup[groupID]?[index].alias
     }
 
+    /// The "[alias]" badge colors (hex, nil = default) for a live window. For the context-menu state.
+    public func aliasColors(forWindowID windowID: String) -> (text: String?, bg: String?) {
+        guard let savedID = savedIDByWindowID[windowID], let (groupID, index) = location(of: savedID),
+              let saved = windowsByGroup[groupID]?[index] else { return (nil, nil) }
+        return (saved.aliasTextColor, saved.aliasBgColor)
+    }
+
     /// Sets (or clears, when nil/blank) a window's display alias on its saved record.
+    /// Clearing the alias also clears its badge colors.
     public func setAlias(windowID: String, alias: String?) {
         guard let savedID = savedIDByWindowID[windowID], let (groupID, index) = location(of: savedID) else {
             return
@@ -281,6 +295,22 @@ public final class GroupStore: ObservableObject {
         let newValue = (trimmed?.isEmpty ?? true) ? nil : trimmed
         guard windowsByGroup[groupID]?[index].alias != newValue else { return }
         windowsByGroup[groupID]?[index].alias = newValue
+        if newValue == nil {
+            windowsByGroup[groupID]?[index].aliasTextColor = nil
+            windowsByGroup[groupID]?[index].aliasBgColor = nil
+        }
+        changed()
+    }
+
+    /// Sets/clears the "[alias]" badge text and/or background color (hex "#RRGGBB"; nil = default).
+    public func setAliasColors(windowID: String, textColor: String?, bgColor: String?) {
+        guard let savedID = savedIDByWindowID[windowID], let (groupID, index) = location(of: savedID) else {
+            return
+        }
+        guard windowsByGroup[groupID]?[index].aliasTextColor != textColor
+            || windowsByGroup[groupID]?[index].aliasBgColor != bgColor else { return }
+        windowsByGroup[groupID]?[index].aliasTextColor = textColor
+        windowsByGroup[groupID]?[index].aliasBgColor = bgColor
         changed()
     }
 
