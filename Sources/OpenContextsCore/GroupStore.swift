@@ -285,12 +285,23 @@ public final class GroupStore: ObservableObject {
         return (saved.aliasTextColor, saved.aliasBgColor)
     }
 
+    /// Location of the window's saved record, creating + binding one (in Ungrouped) if the live window
+    /// has none yet. A rule-routed window is shown via its rule and may never have been persisted, so
+    /// without this `setAlias`/`setAliasColors` would silently no-op on it. Returns nil only when the
+    /// window isn't currently live.
+    private func ensureSavedRecord(forWindowID windowID: String) -> (groupID: String, index: Int)? {
+        if let savedID = savedIDByWindowID[windowID], let loc = location(of: savedID) { return loc }
+        guard let window = activeWindows[windowID] else { return nil }
+        let saved = SavedWindow(window)
+        windowsByGroup[Self.ungroupedID, default: []].append(saved)
+        savedIDByWindowID[windowID] = saved.id
+        return location(of: saved.id)
+    }
+
     /// Sets (or clears, when nil/blank) a window's display alias on its saved record.
     /// Clearing the alias also clears its badge colors.
     public func setAlias(windowID: String, alias: String?) {
-        guard let savedID = savedIDByWindowID[windowID], let (groupID, index) = location(of: savedID) else {
-            return
-        }
+        guard let (groupID, index) = ensureSavedRecord(forWindowID: windowID) else { return }
         let trimmed = alias?.trimmingCharacters(in: .whitespacesAndNewlines)
         let newValue = (trimmed?.isEmpty ?? true) ? nil : trimmed
         guard windowsByGroup[groupID]?[index].alias != newValue else { return }
@@ -304,9 +315,7 @@ public final class GroupStore: ObservableObject {
 
     /// Sets/clears the "[alias]" badge text and/or background color (hex "#RRGGBB"; nil = default).
     public func setAliasColors(windowID: String, textColor: String?, bgColor: String?) {
-        guard let savedID = savedIDByWindowID[windowID], let (groupID, index) = location(of: savedID) else {
-            return
-        }
+        guard let (groupID, index) = ensureSavedRecord(forWindowID: windowID) else { return }
         guard windowsByGroup[groupID]?[index].aliasTextColor != textColor
             || windowsByGroup[groupID]?[index].aliasBgColor != bgColor else { return }
         windowsByGroup[groupID]?[index].aliasTextColor = textColor
