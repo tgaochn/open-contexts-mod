@@ -87,8 +87,8 @@
 "Rules are edited in the file below. Priority: manual drag, then fulltext, then regex." = "Les règles se modifient dans le fichier ci-dessous. Priorité : glisser manuel, puis texte complet, puis regex.";
 "No rules loaded. Edit the file, then Reload from file." = "Aucune règle chargée. Modifiez le fichier, puis Recharger depuis le fichier.";
 "Copy rule for window" = "Copier la règle de la fenêtre";
-"Set alias…" = "Définir un alias…";
-"Clear alias" = "Effacer l'alias";
+"Set alias…" = "Définir l'alias de cet ID de fenêtre…";
+"Clear alias" = "Effacer l'alias de cet ID de fenêtre";
 "Alias text color" = "Couleur du texte de l'alias";
 "Alias background" = "Fond de l'alias";
 "Default" = "Par défaut";

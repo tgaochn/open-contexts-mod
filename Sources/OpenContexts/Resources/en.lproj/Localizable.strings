@@ -87,8 +87,8 @@
 "Rules are edited in the file below. Priority: manual drag, then fulltext, then regex." = "Rules are edited in the file below. Priority: manual drag, then fulltext, then regex.";
 "No rules loaded. Edit the file, then Reload from file." = "No rules loaded. Edit the file, then Reload from file.";
 "Copy rule for window" = "Copy rule for window";
-"Set alias…" = "Set alias…";
-"Clear alias" = "Clear alias";
+"Set alias…" = "Set alias for this window ID…";
+"Clear alias" = "Clear alias for this window ID";
 "Alias text color" = "Alias text color";
 "Alias background" = "Alias background";
 "Default" = "Default";

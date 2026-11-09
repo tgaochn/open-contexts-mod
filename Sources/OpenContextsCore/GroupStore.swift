@@ -23,14 +23,23 @@ public struct GroupRule: Identifiable, Codable, Equatable {
     public var mode: MatchMode
     public var pattern: String
     public var groupID: String
+    // Optional: windows matched by this rule also get this display alias + badge colors
+    // (a manual per-window alias still takes precedence). Hex "#RRGGBB"; nil = default.
+    public var alias: String?
+    public var aliasTextColor: String?
+    public var aliasBgColor: String?
 
     public init(id: String = UUID().uuidString, field: Field = .title,
-                mode: MatchMode = .fullText, pattern: String = "", groupID: String) {
+                mode: MatchMode = .fullText, pattern: String = "", groupID: String,
+                alias: String? = nil, aliasTextColor: String? = nil, aliasBgColor: String? = nil) {
         self.id = id
         self.field = field
         self.mode = mode
         self.pattern = pattern
         self.groupID = groupID
+        self.alias = alias
+        self.aliasTextColor = aliasTextColor
+        self.aliasBgColor = aliasBgColor
     }
 
     func value(in window: WindowInfo) -> String {
@@ -260,14 +269,28 @@ public final class GroupStore: ObservableObject {
     public func aliased(_ windows: [WindowInfo]) -> [WindowInfo] { windows.map(aliased) }
 
     private func aliased(_ window: WindowInfo) -> WindowInfo {
-        guard let savedID = savedIDByWindowID[window.id], let (groupID, index) = location(of: savedID),
-              let saved = windowsByGroup[groupID]?[index],
-              let alias = saved.alias, !alias.isEmpty else { return window }
-        var copy = window
-        copy.alias = alias
-        copy.aliasTextColor = saved.aliasTextColor
-        copy.aliasBgColor = saved.aliasBgColor
-        return copy
+        // 1. A manual per-window alias (right-click) always wins.
+        if let savedID = savedIDByWindowID[window.id], let (groupID, index) = location(of: savedID),
+           let saved = windowsByGroup[groupID]?[index], let alias = saved.alias, !alias.isEmpty {
+            var copy = window
+            copy.alias = alias
+            copy.aliasTextColor = saved.aliasTextColor
+            copy.aliasBgColor = saved.aliasBgColor
+            return copy
+        }
+        // 2. Otherwise the first matching rule that carries an alias (survives restart / title changes,
+        //    since it's matched live). `rules` is already in priority order.
+        for rule in rules where (rule.alias?.isEmpty == false)
+            && groups.contains(where: { $0.id == rule.groupID }) {
+            if rule.matches(window) {
+                var copy = window
+                copy.alias = rule.alias
+                copy.aliasTextColor = rule.aliasTextColor
+                copy.aliasBgColor = rule.aliasBgColor
+                return copy
+            }
+        }
+        return window
     }
 
     /// The alias on a live window's saved record, or nil. For the context-menu state.
@@ -554,9 +577,12 @@ public final class GroupStore: ObservableObject {
                 let ofGroup = ofMode.filter { $0.groupID == group.id }
                 guard !ofGroup.isEmpty else { continue }
                 let entryLines = ofGroup.map { rule -> String in
-                    rule.field == .title
-                        ? "        { \"pattern\": \(Self.jsonString(rule.pattern)) }"
-                        : "        { \"pattern\": \(Self.jsonString(rule.pattern)), \"field\": \"\(rule.field.token)\" }"
+                    var parts = ["\"pattern\": \(Self.jsonString(rule.pattern))"]
+                    if rule.field != .title { parts.append("\"field\": \"\(rule.field.token)\"") }
+                    if let a = rule.alias { parts.append("\"alias\": \(Self.jsonString(a))") }
+                    if let c = rule.aliasTextColor { parts.append("\"aliasTextColor\": \(Self.jsonString(c))") }
+                    if let c = rule.aliasBgColor { parts.append("\"aliasBgColor\": \(Self.jsonString(c))") }
+                    return "        { " + parts.joined(separator: ", ") + " }"
                 }
                 groupBlocks.append("      \(Self.jsonString(group.name)): [\n"
                                    + entryLines.joined(separator: ",\n") + "\n      ]")
@@ -652,11 +678,13 @@ public final class GroupStore: ObservableObject {
             uniquingKeysWith: { first, _ in first }
         )
         var errors: [String] = []
-        var collected: [(mode: GroupRule.MatchMode, groupID: String, field: GroupRule.Field, pattern: String)] = []
+        var collected: [(mode: GroupRule.MatchMode, groupID: String, field: GroupRule.Field, pattern: String,
+                         alias: String?, aliasTextColor: String?, aliasBgColor: String?)] = []
 
         func addEntry(mode: GroupRule.MatchMode, groupName: String, groupID: String, index: Int, _ entry: Any) {
             let field: GroupRule.Field
             let pattern: String
+            var alias: String?, aliasTextColor: String?, aliasBgColor: String?
             if let text = entry as? String {
                 field = .title; pattern = text
             } else if let obj = entry as? [String: Any] {
@@ -670,13 +698,16 @@ public final class GroupStore: ObservableObject {
                     }
                     field = parsed
                 } else { field = .title }
+                alias = (obj["alias"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                aliasTextColor = (obj["aliasTextColor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                aliasBgColor = (obj["aliasBgColor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             } else {
                 errors.append("\(mode.token)/\(groupName)[\(index)]: must be a string or an object"); return
             }
             guard !pattern.trimmingCharacters(in: .whitespaces).isEmpty else {
                 errors.append("\(mode.token)/\(groupName)[\(index)]: empty pattern"); return
             }
-            collected.append((mode, groupID, field, pattern))
+            collected.append((mode, groupID, field, pattern, alias, aliasTextColor, aliasBgColor))
         }
 
         if let nested = rulesAny as? [String: Any] {
@@ -715,7 +746,10 @@ public final class GroupStore: ObservableObject {
                 guard let groupName = obj["group"] as? String, let groupID = idByName[groupName] else {
                     errors.append("rule \(n): group not found"); continue
                 }
-                collected.append((mode, groupID, field, pattern))
+                let alias = (obj["alias"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                let aliasTextColor = (obj["aliasTextColor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                let aliasBgColor = (obj["aliasBgColor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                collected.append((mode, groupID, field, pattern, alias, aliasTextColor, aliasBgColor))
             }
         } else {
             return ["\"rules\" must be an object (nested) or an array (flat)"]
@@ -731,7 +765,8 @@ public final class GroupStore: ObservableObject {
             if ga != gb { return ga < gb }
             return lhs.offset < rhs.offset
         }.map(\.element)
-        rules = ordered.map { GroupRule(field: $0.field, mode: $0.mode, pattern: $0.pattern, groupID: $0.groupID) }
+        rules = ordered.map { GroupRule(field: $0.field, mode: $0.mode, pattern: $0.pattern, groupID: $0.groupID,
+                                        alias: $0.alias, aliasTextColor: $0.aliasTextColor, aliasBgColor: $0.aliasBgColor) }
         rulesChanged()
         return []
     }
