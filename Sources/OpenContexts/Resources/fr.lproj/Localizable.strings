@@ -16,6 +16,7 @@
 "Display" = "Affichage";
 "Sidebar position" = "Position de la barre latérale";
 "Language" = "Langue";
+"Launch at login" = "Lancer à l'ouverture de session";
 "System" = "Système";
 "All windows" = "Toutes les fenêtres";
 "Current app windows" = "Fenêtres de l’app active";

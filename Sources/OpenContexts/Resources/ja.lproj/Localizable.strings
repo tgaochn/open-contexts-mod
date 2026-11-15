@@ -16,6 +16,7 @@
 "Display" = "表示内容";
 "Sidebar position" = "サイドバーの位置";
 "Language" = "言語";
+"Launch at login" = "ログイン時に起動";
 "System" = "システムに合わせる";
 "All windows" = "すべてのウインドウ";
 "Current app windows" = "現在のアプリのウインドウ";

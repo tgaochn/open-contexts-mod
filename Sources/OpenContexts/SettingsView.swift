@@ -296,6 +296,7 @@ struct SettingsView: View {
     @ObservedObject var groupStore: GroupStore
     @ObservedObject var shortcuts: ShortcutController
     @State private var page: SettingsPage = .general
+    @State private var launchAtLogin = LoginItem.isEnabled
 
     private var language: AppLanguage { settings.language }
 
@@ -363,6 +364,13 @@ struct SettingsView: View {
                 }
                 .labelsHidden()
                 .frame(width: 200)
+            }
+            settingsRow("Launch at login") {
+                Toggle("", isOn: Binding(
+                    get: { launchAtLogin },
+                    set: { newValue in if LoginItem.setEnabled(newValue) { launchAtLogin = newValue } }
+                ))
+                .labelsHidden()
             }
             settingsRow("Accessibility") {
                 HStack {

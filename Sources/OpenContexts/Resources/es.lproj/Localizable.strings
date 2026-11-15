@@ -16,6 +16,7 @@
 "Display" = "Contenido";
 "Sidebar position" = "Posición de la barra lateral";
 "Language" = "Idioma";
+"Launch at login" = "Abrir al iniciar sesión";
 "System" = "Sistema";
 "All windows" = "Todas las ventanas";
 "Current app windows" = "Ventanas de la app actual";

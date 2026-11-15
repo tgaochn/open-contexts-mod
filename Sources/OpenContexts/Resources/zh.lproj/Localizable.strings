@@ -16,6 +16,7 @@
 "Display" = "显示内容";
 "Sidebar position" = "应用栏位置";
 "Language" = "语言";
+"Launch at login" = "开机启动";
 "System" = "跟随系统";
 "All windows" = "所有窗口";
 "Current app windows" = "当前应用窗口";

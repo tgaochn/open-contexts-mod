@@ -16,6 +16,7 @@
 "Display" = "Display";
 "Sidebar position" = "Sidebar position";
 "Language" = "Language";
+"Launch at login" = "Launch at login";
 "System" = "System";
 "All windows" = "All windows";
 "Current app windows" = "Current app windows";
